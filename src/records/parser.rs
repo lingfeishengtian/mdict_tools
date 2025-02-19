@@ -1,10 +1,13 @@
 use crate::{compressed_block::block::decode_block, file_reader::FileHandler, header::parser::{HeaderInfo, MdictVersion}, key_index::{self, parser::KeySection}, shared_macros::read_int_from_buf};
+use std::collections::VecDeque;
 
 pub struct RecordSection {
     record_data_offset: u64,
     record_index_prefix_sum: Vec<RecordIndex>,
+    cache: VecDeque<(u64, Vec<u8>)>, // Cache to store the 4 most used records
 }
 
+#[derive(Clone)]
 pub struct RecordIndex {
     compressed_size: u64,
     uncompressed_size: u64,
@@ -18,17 +21,42 @@ impl RecordSection {
         RecordSection {
             record_data_offset,
             record_index_prefix_sum,
+            cache: VecDeque::with_capacity(5),
         }
     }
 
-    pub fn record_at_offset(&self, offset: u64, file_handler: &mut FileHandler) -> String {
-        let record_index_i = self.bin_search_record_index(offset);
-        let record_index = &self.record_index_prefix_sum[record_index_i as usize];
-        let mut record_data = vec![0; self.record_index_prefix_sum[record_index_i as usize + 1].compressed_size as usize - record_index.compressed_size as usize];
-        file_handler.read_from_file(self.record_data_offset + record_index.compressed_size, &mut record_data).unwrap();
+    fn decode_record_data(&mut self, record_index: u64, file_handler: &mut FileHandler) {
+        // If in cache move to front
+        for i in 0..self.cache.len() {
+            if self.cache[i].0 == record_index {
+                let record = self.cache.remove(i).unwrap();
+                self.cache.push_front(record);
+                return;
+            }
+        }
+
+        // If cache is full remove the last element
+        if self.cache.len() == 4 {
+            self.cache.pop_back();
+        }
+
+        println!("Record index cache miss i: {}", record_index);
+        let size_of_compressed = self.record_index_prefix_sum[record_index as usize + 1].compressed_size - self.record_index_prefix_sum[record_index as usize].compressed_size;
+        let mut record_data = vec![0; size_of_compressed as usize];
+        file_handler.read_from_file(self.record_data_offset + self.record_index_prefix_sum[record_index as usize].compressed_size, &mut record_data).unwrap();
 
         record_data = decode_block(&record_data).unwrap();
+        
+        // Add to cache
+        self.cache.push_front((record_index, record_data));
+    }
 
+    pub fn record_at_offset(&mut self, offset: u64, file_handler: &mut FileHandler) -> String {
+        let record_index_i = self.bin_search_record_index(offset);
+        self.decode_record_data(record_index_i, file_handler);
+        let record_data = self.cache.front().unwrap().1.as_slice();
+
+        let record_index = &self.record_index_prefix_sum[record_index_i as usize];
         let decompressed_offset = (offset - record_index.uncompressed_size) as usize;
 
         // Return until 0x0A 0x00
@@ -41,7 +69,9 @@ impl RecordSection {
             record_text.push(record_data[i]);
         }
         // TODO: Change to encoding in header
-        std::str::from_utf8(&record_text).unwrap().to_string()
+        let record = std::str::from_utf8(&record_text).unwrap().to_string();
+
+        record
     }
 
     // Return the index of the record index that contains the offset
@@ -128,11 +158,15 @@ mod tests {
 
     #[test]
     fn test_record_section_parse() {
-        let (mut file_handler, header_info, record_section) = setup();
+        let (mut file_handler, header_info, mut record_section) = setup();
 
         // Test Key ID: 280887285, Key Text: 飲
         let record_text = record_section.record_at_offset(280887285, &mut file_handler);
         
         assert_eq!(record_text, "@@@LINK=@jitendex-2799140");
+
+        // Test cache functionality
+        let record_text_cached = record_section.record_at_offset(280887285, &mut file_handler);
+        assert_eq!(record_text_cached, "@@@LINK=@jitendex-2799140");
     }
 }

@@ -15,7 +15,7 @@ pub struct KeySection {
     num_blocks: u64,
     num_entries: u64,
     addler32_checksum: u32,
-    cached_key_blocks: Option<(u64, Vec<KeyBlock>)>,
+    cached_key_blocks: [Option<(u64, Vec<KeyBlock>)>; 2],
 }
 
 #[derive(Debug)]
@@ -44,7 +44,7 @@ impl KeyBlockInfo {
 #[derive(Debug)]
 #[derive(Clone)]
 pub struct KeyBlock {
-    key_id: u64,
+    pub key_id: u64,
     key_text: String,
 }
 
@@ -107,7 +107,7 @@ impl KeySection {
             num_blocks,
             num_entries,
             addler32_checksum,
-            cached_key_blocks: None,
+            cached_key_blocks: [None, None],
         })
     }
 
@@ -150,22 +150,36 @@ impl KeySection {
     }
 
     pub fn read_block_index(&mut self, file_handler: &mut FileHandler, index: u64, key_section_offset: u64) -> KeyBlock {
+        self.read_block(file_handler, index);
+
+        self.cached_key_blocks[0].as_ref().unwrap().1[key_section_offset as usize].clone()
+    }
+
+    fn read_block(&mut self, file_handler: &mut FileHandler, index: u64) {
         let key_info = &self.key_info_blocks[index as usize];
         let offset = self.key_info_offset + self.key_info_prefix_sum[index as usize];
         let size = key_info.compressed_size as usize;
 
-        if let Some((cached_index, cached_key_blocks)) = &self.cached_key_blocks {
-            if *cached_index == index {
-                return cached_key_blocks[key_section_offset as usize].clone();
+        // Check cache for key blocks, if the key block is found, move it to the front and return it 
+        let cached_key_blocks_len = self.cached_key_blocks.len();
+        for i in 0..cached_key_blocks_len {
+            if let Some((cached_index, _cached_key_blocks)) = &self.cached_key_blocks[i] {
+                if *cached_index == index {
+                    // Move to front
+                    self.cached_key_blocks.swap(0, i);
+                    return
+                }
             }
         }
 
         println!("Cache miss index: {}", index);
-        self.cached_key_blocks = Some((index, Self::decode_key_blocks(file_handler, offset, size as u64)));
-        self.cached_key_blocks.as_ref().unwrap().1[key_section_offset as usize].clone()
+        
+        let key_blocks = Self::decode_key_blocks(file_handler, offset, size as u64);
+        self.cached_key_blocks.swap(0, 1); 
+        self.cached_key_blocks[0] = Some((index, key_blocks));
     }
 
-    pub fn search_query(&self, query: &str, file_handler: &mut FileHandler) -> Option<SearchResultPointer> {
+    pub fn search_query(&mut self, query: &str, file_handler: &mut FileHandler) -> Option<SearchResultPointer> {
         let (first, last) = self.get_encapsulating_indices(query)?;
 
         // Find first instance where prefix is the query in the first page
@@ -179,12 +193,10 @@ impl KeySection {
         Some(SearchResultPointer::new(first, last, start_ind, end_ind))
     }
 
-    fn search_index_page_for_query_start_ind(&self, query: &str, file_handler: &mut FileHandler, index: u64) -> u64 {
+    fn search_index_page_for_query_start_ind(&mut self, query: &str, file_handler: &mut FileHandler, index: u64) -> u64 {
         let key_info = &self.key_info_blocks[index as usize];
         let offset = self.key_info_offset + self.key_info_prefix_sum[index as usize];
         let size = key_info.compressed_size as usize;
-
-        let key_blocks = Self::decode_key_blocks(file_handler, offset, size as u64);
 
         let mut start = 0;
         let mut end = key_info.num_entries;
@@ -192,9 +204,9 @@ impl KeySection {
 
         while start <= end {
             let mid = start + (end - start) / 2;
-            let key_block = &key_blocks[mid as usize];
+            let key_block = self.read_block_index(file_handler, index, mid);
 
-            if (mid == 0 || key_blocks[mid as usize - 1].key_text.as_str() < query) && key_block.key_text.starts_with(query) {
+            if (mid == 0 || self.read_block_index(file_handler, index, mid - 1).key_text.as_str() < query) && key_block.key_text.starts_with(query) {
                 return mid;
             } else if key_block.key_text.as_str() < query && !key_block.key_text.starts_with(query) {
                 // Search the right half
@@ -208,22 +220,20 @@ impl KeySection {
         result.unwrap()
     }
 
-    fn search_index_page_for_query_end_ind(&self, query: &str, file_handler: &mut FileHandler, index: u64) -> u64 {
-        let key_info = &self.key_info_blocks[index as usize];
-        let offset = self.key_info_offset + self.key_info_prefix_sum[index as usize];
-        let size = key_info.compressed_size as usize;
-
-        let key_blocks = Self::decode_key_blocks(file_handler, offset, size as u64);
+    fn search_index_page_for_query_end_ind(&mut self, query: &str, file_handler: &mut FileHandler, index: u64) -> u64 {
+        let key_info_num_entries = self.key_info_blocks[index as usize].num_entries;
+        // let offset = self.key_info_offset + self.key_info_prefix_sum[index as usize];
+        // let size = self.key_info_blocks[index as usize].compressed_size as usize;
 
         let mut start = 0;
-        let mut end = key_info.num_entries;
+        let mut end = key_info_num_entries;
         let mut result = None;
 
         while start <= end {
             let mid = start + (end - start) / 2;
-            let key_block = &key_blocks[mid as usize];
+            let key_block = self.read_block_index(file_handler, index, mid);
 
-            if (mid == key_info.num_entries - 1 || (key_blocks[mid as usize + 1].key_text.as_str() > query && !key_blocks[mid as usize + 1].key_text.starts_with(query))) && key_block.key_text.starts_with(query) {
+            if (mid == key_info_num_entries - 1 || (self.read_block_index(file_handler, index, mid + 1).key_text.as_str() > query && !self.read_block_index(file_handler, index, mid + 1).key_text.starts_with(query))) && key_block.key_text.starts_with(query) {
                 return mid + 1;
             } else if key_block.key_text.as_str() > query && !key_block.key_text.starts_with(query) {
                 // Search the left half
@@ -482,6 +492,15 @@ mod tests {
 
         assert_eq!(first.key_text, "食う");
         assert_eq!(second.key_text, "食うや食わず");
+
+        let query = "か";
+        let start = std::time::Instant::now();
+        let mut key_blocks = key_index.search_query(query, &mut file_handler).unwrap();
+        println!("Time to complete: {:?}", start.elapsed());
+
+        // while let Some(key_block) = key_blocks.next(&mut file_handler, &mut key_index) {
+        //     println!("Key block: {:?}", key_block);
+        // }
 
         assert_eq!(0, key_index.get_heap_size());
     }

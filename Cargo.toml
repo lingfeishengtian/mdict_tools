@@ -9,6 +9,7 @@ log = "0.4.25"
 zune-inflate = "0.2.54"
 paste = "1.0.15"
 minilzo-rs = "0.6.1"
+regex = "1.11.1"
 
 [dev-dependencies]
 get-size2 = "0.1.3"
