@@ -1,3 +1,5 @@
 /target
 
 resources/jitendex/
+
+.DS_Store

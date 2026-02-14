@@ -1,12 +1,16 @@
 pub mod mdict;
-mod file_reader;
-mod header;
+pub mod file_reader;
+pub mod header;
 mod key_index;
 mod compressed_block;
 mod records;
+pub mod format;
 mod shared_macros;
 
-pub use mdict::MDict;
+pub mod types;
+pub mod error;
+ 
+pub use mdict::Mdict;
 
 fn read_int_from_filehandler(
     file_handler: &mut file_reader::FileHandler,
