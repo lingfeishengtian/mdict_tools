@@ -51,6 +51,55 @@ struct KeySectionV2Raw {
     key_info: Vec<u8>,
 }
 
+// Per-block raw structs for binrw parsing (two variants: v1 uses u8 sizes, v2 uses u16)
+#[binrw::binread]
+#[br(big)]
+#[derive(Debug)]
+struct KeyBlockInfoV1Raw {
+    num_entries: u64,
+
+    #[br(temp)]
+    size_of_first: u8,
+    #[br(count = size_of_first as usize)]
+    first: Vec<u8>,
+    #[br(temp)]
+    first_null: u8,
+
+    #[br(temp)]
+    size_of_last: u8,
+    #[br(count = size_of_last as usize)]
+    last: Vec<u8>,
+    #[br(temp)]
+    last_null: u8,
+
+    compressed_size: u64,
+    decompressed_size: u64,
+}
+
+#[binrw::binread]
+#[br(big)]
+#[derive(Debug)]
+struct KeyBlockInfoV2Raw {
+    num_entries: u64,
+
+    #[br(temp)]
+    size_of_first: u16,
+    #[br(count = size_of_first as usize)]
+    first: Vec<u8>,
+    #[br(temp)]
+    first_null: u8,
+
+    #[br(temp)]
+    size_of_last: u16,
+    #[br(count = size_of_last as usize)]
+    last: Vec<u8>,
+    #[br(temp)]
+    last_null: u8,
+
+    compressed_size: u64,
+    decompressed_size: u64,
+}
+
 impl KeySection {
     pub fn read_from<R: Read + Seek>(reader: &mut R, header: &HeaderInfo) -> Result<Self> {
         // Seek to header end
@@ -100,7 +149,8 @@ impl KeySection {
 
         // Parse key_info_buf into KeyBlockInfo entries using helper
         let size_of_first_or_last = if num_bytes_after_decomp_v2.is_some() { 2usize } else { 1usize };
-        let key_info_blocks = parse_key_info(&key_info_buf, size_of_first_or_last)?;
+        // Use the binrw-based parser which delegates to the small per-block BinRead structs.
+        let key_info_blocks = parse_key_info_binrw(&key_info_buf, size_of_first_or_last)?;
 
         // Build prefix sum
         let mut prefix_sum = Vec::with_capacity(key_info_blocks.len() + 1);
@@ -126,62 +176,36 @@ impl KeySection {
     }
 }
 
-/// Parse the in-memory `key_info` buffer into `KeyBlockInfo` entries.
-fn parse_key_info(buf: &[u8], size_of_first_or_last: usize) -> Result<Vec<KeyBlockInfo>> {
-    let mut offset: usize = 0;
-    let buf_len = buf.len();
+fn parse_key_info_binrw(buf: &[u8], size_of_first_or_last: usize) -> Result<Vec<KeyBlockInfo>> {
+    use std::io::Cursor;
+
+    let mut cur = Cursor::new(buf);
     let mut out = Vec::new();
 
-    while offset < buf_len {
-        // num_entries (u64, big-endian)
-        if offset + 8 > buf_len { return Err("truncated key_info num_entries".into()); }
-        let num_entries_field = u64::from_be_bytes(buf[offset..offset+8].try_into().unwrap());
-        offset += 8;
-
-        // size_of_first
-        let size_of_first = if size_of_first_or_last == 1 {
-            if offset + 1 > buf_len { return Err("truncated size_of_first".into()); }
-            let v = buf[offset] as usize; offset += 1; v
+    while (cur.position() as usize) < buf.len() {
+        if size_of_first_or_last == 1 {
+            let raw: KeyBlockInfoV1Raw = KeyBlockInfoV1Raw::read(&mut cur)?;
+            let first = String::from_utf8(raw.first).map_err(|_| "invalid utf8 in first")?;
+            let last = String::from_utf8(raw.last).map_err(|_| "invalid utf8 in last")?;
+            out.push(KeyBlockInfo {
+                num_entries: raw.num_entries,
+                first,
+                last,
+                compressed_size: raw.compressed_size,
+                decompressed_size: raw.decompressed_size,
+            });
         } else {
-            if offset + 2 > buf_len { return Err("truncated size_of_first".into()); }
-            let v = u16::from_be_bytes(buf[offset..offset+2].try_into().unwrap()) as usize; offset += 2; v
-        };
-
-        if offset + size_of_first > buf_len { return Err("truncated first bytes".into()); }
-        let first_bytes = &buf[offset..offset + size_of_first]; offset += size_of_first;
-        // consume null terminator
-        if offset >= buf_len { return Err("missing null after first".into()); }
-        offset += 1;
-        let first = String::from_utf8(first_bytes.to_vec()).map_err(|_| "invalid utf8 in first" )?;
-
-        // size_of_last
-        let size_of_last = if size_of_first_or_last == 1 {
-            if offset + 1 > buf_len { return Err("truncated size_of_last".into()); }
-            let v = buf[offset] as usize; offset += 1; v
-        } else {
-            if offset + 2 > buf_len { return Err("truncated size_of_last".into()); }
-            let v = u16::from_be_bytes(buf[offset..offset+2].try_into().unwrap()) as usize; offset += 2; v
-        };
-
-        if offset + size_of_last > buf_len { return Err("truncated last bytes".into()); }
-        let last_bytes = &buf[offset..offset + size_of_last]; offset += size_of_last;
-        if offset >= buf_len { return Err("missing null after last".into()); }
-        offset += 1;
-        let last = String::from_utf8(last_bytes.to_vec()).map_err(|_| "invalid utf8 in last" )?;
-
-        // compressed_size, decompressed_size
-        if offset + 8 > buf_len { return Err("truncated compressed_size".into()); }
-        let compressed_size = u64::from_be_bytes(buf[offset..offset+8].try_into().unwrap()); offset += 8;
-        if offset + 8 > buf_len { return Err("truncated decompressed_size".into()); }
-        let decompressed_size = u64::from_be_bytes(buf[offset..offset+8].try_into().unwrap()); offset += 8;
-
-        out.push(KeyBlockInfo {
-            num_entries: num_entries_field,
-            first,
-            last,
-            compressed_size,
-            decompressed_size,
-        });
+            let raw: KeyBlockInfoV2Raw = KeyBlockInfoV2Raw::read(&mut cur)?;
+            let first = String::from_utf8(raw.first).map_err(|_| "invalid utf8 in first")?;
+            let last = String::from_utf8(raw.last).map_err(|_| "invalid utf8 in last")?;
+            out.push(KeyBlockInfo {
+                num_entries: raw.num_entries,
+                first,
+                last,
+                compressed_size: raw.compressed_size,
+                decompressed_size: raw.decompressed_size,
+            });
+        }
     }
 
     Ok(out)
