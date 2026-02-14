@@ -65,18 +65,18 @@ impl KeySection {
         // Parse the outer header using binrw depending on version
         let (num_blocks, num_entries, num_bytes_after_decomp_v2, key_info_block_size, key_blocks_size, addler32_checksum, mut key_info_buf) =
             if version == 1 {
-                let raw: KeySectionV1Raw = binrw::BinRead::read_be(reader)?;
+                let raw: KeySectionV1Raw = KeySectionV1Raw::read(reader)?;
                 (
                     raw.num_blocks as u64,
                     raw.num_entries as u64,
-                    None,
+                    None::<u64>,
                     raw.key_info_block_size as u64,
                     raw.key_blocks_size as u64,
                     raw.addler32_checksum,
                     raw.key_info,
                 )
             } else {
-                let raw: KeySectionV2Raw = binrw::BinRead::read_be(reader)?;
+                let raw: KeySectionV2Raw = KeySectionV2Raw::read(reader)?;
                 (
                     raw.num_blocks,
                     raw.num_entries,
@@ -98,63 +98,9 @@ impl KeySection {
             key_info_buf = decompressed;
         }
 
-        // Parse key_info_buf into KeyBlockInfo entries using manual byte-slice parsing
-        let mut offset: usize = 0;
-        let buf_len = key_info_buf.len();
+        // Parse key_info_buf into KeyBlockInfo entries using helper
         let size_of_first_or_last = if num_bytes_after_decomp_v2.is_some() { 2usize } else { 1usize };
-        let mut key_info_blocks = Vec::new();
-
-        while offset < buf_len {
-            // num_entries (u64, big-endian)
-            if offset + 8 > buf_len { return Err("truncated key_info num_entries".into()); }
-            let num_entries_field = u64::from_be_bytes(key_info_buf[offset..offset+8].try_into().unwrap());
-            offset += 8;
-
-            // size_of_first
-            let size_of_first = if size_of_first_or_last == 1 {
-                if offset + 1 > buf_len { return Err("truncated size_of_first".into()); }
-                let v = key_info_buf[offset] as usize; offset += 1; v
-            } else {
-                if offset + 2 > buf_len { return Err("truncated size_of_first".into()); }
-                let v = u16::from_be_bytes(key_info_buf[offset..offset+2].try_into().unwrap()) as usize; offset += 2; v
-            };
-
-            if offset + size_of_first > buf_len { return Err("truncated first bytes".into()); }
-            let first_bytes = &key_info_buf[offset..offset + size_of_first]; offset += size_of_first;
-            // consume null terminator
-            if offset >= buf_len { return Err("missing null after first".into()); }
-            offset += 1;
-            let first = String::from_utf8(first_bytes.to_vec()).map_err(|_| "invalid utf8 in first" )?;
-
-            // size_of_last
-            let size_of_last = if size_of_first_or_last == 1 {
-                if offset + 1 > buf_len { return Err("truncated size_of_last".into()); }
-                let v = key_info_buf[offset] as usize; offset += 1; v
-            } else {
-                if offset + 2 > buf_len { return Err("truncated size_of_last".into()); }
-                let v = u16::from_be_bytes(key_info_buf[offset..offset+2].try_into().unwrap()) as usize; offset += 2; v
-            };
-
-            if offset + size_of_last > buf_len { return Err("truncated last bytes".into()); }
-            let last_bytes = &key_info_buf[offset..offset + size_of_last]; offset += size_of_last;
-            if offset >= buf_len { return Err("missing null after last".into()); }
-            offset += 1;
-            let last = String::from_utf8(last_bytes.to_vec()).map_err(|_| "invalid utf8 in last" )?;
-
-            // compressed_size, decompressed_size
-            if offset + 8 > buf_len { return Err("truncated compressed_size".into()); }
-            let compressed_size = u64::from_be_bytes(key_info_buf[offset..offset+8].try_into().unwrap()); offset += 8;
-            if offset + 8 > buf_len { return Err("truncated decompressed_size".into()); }
-            let decompressed_size = u64::from_be_bytes(key_info_buf[offset..offset+8].try_into().unwrap()); offset += 8;
-
-            key_info_blocks.push(KeyBlockInfo {
-                num_entries: num_entries_field,
-                first,
-                last,
-                compressed_size,
-                decompressed_size,
-            });
-        }
+        let key_info_blocks = parse_key_info(&key_info_buf, size_of_first_or_last)?;
 
         // Build prefix sum
         let mut prefix_sum = Vec::with_capacity(key_info_blocks.len() + 1);
@@ -178,4 +124,65 @@ impl KeySection {
             addler32_checksum,
         })
     }
+}
+
+/// Parse the in-memory `key_info` buffer into `KeyBlockInfo` entries.
+fn parse_key_info(buf: &[u8], size_of_first_or_last: usize) -> Result<Vec<KeyBlockInfo>> {
+    let mut offset: usize = 0;
+    let buf_len = buf.len();
+    let mut out = Vec::new();
+
+    while offset < buf_len {
+        // num_entries (u64, big-endian)
+        if offset + 8 > buf_len { return Err("truncated key_info num_entries".into()); }
+        let num_entries_field = u64::from_be_bytes(buf[offset..offset+8].try_into().unwrap());
+        offset += 8;
+
+        // size_of_first
+        let size_of_first = if size_of_first_or_last == 1 {
+            if offset + 1 > buf_len { return Err("truncated size_of_first".into()); }
+            let v = buf[offset] as usize; offset += 1; v
+        } else {
+            if offset + 2 > buf_len { return Err("truncated size_of_first".into()); }
+            let v = u16::from_be_bytes(buf[offset..offset+2].try_into().unwrap()) as usize; offset += 2; v
+        };
+
+        if offset + size_of_first > buf_len { return Err("truncated first bytes".into()); }
+        let first_bytes = &buf[offset..offset + size_of_first]; offset += size_of_first;
+        // consume null terminator
+        if offset >= buf_len { return Err("missing null after first".into()); }
+        offset += 1;
+        let first = String::from_utf8(first_bytes.to_vec()).map_err(|_| "invalid utf8 in first" )?;
+
+        // size_of_last
+        let size_of_last = if size_of_first_or_last == 1 {
+            if offset + 1 > buf_len { return Err("truncated size_of_last".into()); }
+            let v = buf[offset] as usize; offset += 1; v
+        } else {
+            if offset + 2 > buf_len { return Err("truncated size_of_last".into()); }
+            let v = u16::from_be_bytes(buf[offset..offset+2].try_into().unwrap()) as usize; offset += 2; v
+        };
+
+        if offset + size_of_last > buf_len { return Err("truncated last bytes".into()); }
+        let last_bytes = &buf[offset..offset + size_of_last]; offset += size_of_last;
+        if offset >= buf_len { return Err("missing null after last".into()); }
+        offset += 1;
+        let last = String::from_utf8(last_bytes.to_vec()).map_err(|_| "invalid utf8 in last" )?;
+
+        // compressed_size, decompressed_size
+        if offset + 8 > buf_len { return Err("truncated compressed_size".into()); }
+        let compressed_size = u64::from_be_bytes(buf[offset..offset+8].try_into().unwrap()); offset += 8;
+        if offset + 8 > buf_len { return Err("truncated decompressed_size".into()); }
+        let decompressed_size = u64::from_be_bytes(buf[offset..offset+8].try_into().unwrap()); offset += 8;
+
+        out.push(KeyBlockInfo {
+            num_entries: num_entries_field,
+            first,
+            last,
+            compressed_size,
+            decompressed_size,
+        });
+    }
+
+    Ok(out)
 }

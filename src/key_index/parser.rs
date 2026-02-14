@@ -39,6 +39,14 @@ impl KeyBlockInfo {
     pub fn is_greater_than(&self, query: &str) -> bool {
         &self.first.as_str() > &query && !self.first.starts_with(query)
     }
+
+    pub fn first(&self) -> &str {
+        &self.first
+    }
+
+    pub fn last(&self) -> &str {
+        &self.last
+    }
 }
 
 #[derive(Debug)]
@@ -317,6 +325,19 @@ impl KeySection {
         }
 
         prefix_sum
+    }
+
+    // Public accessors for tests and external callers
+    pub fn num_blocks(&self) -> u64 {
+        self.num_blocks
+    }
+
+    pub fn num_entries(&self) -> u64 {
+        self.num_entries
+    }
+
+    pub fn blocks(&self) -> &Vec<KeyBlockInfo> {
+        &self.key_info_blocks
     }
 
     fn read_key_info_block(

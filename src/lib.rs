@@ -1,7 +1,7 @@
 pub mod mdict;
 pub mod file_reader;
 pub mod header;
-mod key_index;
+pub mod key_index;
 mod compressed_block;
 mod records;
 pub mod format;
