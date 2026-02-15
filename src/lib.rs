@@ -2,8 +2,8 @@ pub mod mdict;
 pub mod file_reader;
 pub mod header;
 pub mod key_index;
-mod compressed_block;
-mod records;
+pub mod compressed_block;
+pub mod records;
 pub mod format;
 mod shared_macros;
 

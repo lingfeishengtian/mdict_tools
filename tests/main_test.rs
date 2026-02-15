@@ -105,4 +105,120 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn decode_format_block_matches_old_decoder() {
+        // Compare the legacy decoder against the new `format::decode_format_block` for a real block
+        let ctx = prepare();
+
+        // Only run if there is at least one block
+        if ctx.new_key_section.num_blocks == 0 {
+            eprintln!("no key blocks to test");
+            return;
+        }
+
+        use mdict_tools::file_reader::FileHandler;
+
+        // Open file and read the first key-info block raw bytes
+        let mut fh = FileHandler::open("resources/jitendex/jitendex.mdx").expect("open file");
+
+        // Use the new key_section metadata to locate the raw compressed block
+        let kb0 = &ctx.new_key_section.key_info_blocks[0];
+        let prefix = &ctx.new_key_section.key_info_prefix_sum;
+        // key blocks follow immediately after the key_info block. Compute
+        // the start of the key_blocks area as `next_section_offset - total_key_blocks_size`.
+        let total_key_blocks_size = *ctx.new_key_section.key_info_prefix_sum.last().unwrap_or(&0u64);
+        let key_blocks_start = ctx.new_key_section.next_section_offset - total_key_blocks_size;
+        let offset = key_blocks_start + prefix[0];
+        let size = kb0.compressed_size as usize;
+
+        println!("Reading block 0 at offset {} size {}", offset, size);
+
+        let mut buf = vec![0u8; size];
+        fh.read_from_file(offset, &mut buf).expect("read raw block");
+
+        // Decode with legacy decoder
+        let old_decoded = mdict_tools::compressed_block::block::decode_block(&buf).expect("old decode");
+
+        // Decode with new format decoder
+        let new_decoded = mdict_tools::format::decode_format_block(&buf).expect("new decode");
+
+        // They must match
+        assert_eq!(old_decoded, new_decoded, "decoded outputs must match between old and new decoders");
+    }
+
+    #[test]
+    fn record_section_parsers_match_old_api() {
+        // Compare legacy RecordSection::parse + record_at_offset against
+        // new `format::RecordSection::parse` + manual decode using prefix sums.
+        let ctx = prepare();
+
+        use std::fs::File;
+        use std::io::{Read, Seek, SeekFrom};
+        use mdict_tools::file_reader::FileHandler;
+
+        // Open both readers
+        let mut fh = FileHandler::open("resources/jitendex/jitendex.mdx").expect("open file for old parser");
+        let mut file = File::open("resources/jitendex/jitendex.mdx").expect("open file for new parser");
+
+        // Parse with legacy API
+        let mut old_record_section = mdict_tools::records::parser::RecordSection::parse(&ctx.old_header, &ctx.old_key_section, &mut fh);
+
+        // Parse with new format API
+        let new_record_section = mdict_tools::format::RecordSection::parse(&ctx.new_header, &ctx.new_key_section, &mut file);
+
+        // Choose a sample offset that should be valid; reuse one used elsewhere in unit tests
+        let offset: u64 = 280_887_285;
+
+        // Get the record text via legacy API
+        let old_text = old_record_section.record_at_offset(offset, &mut fh);
+
+        // Get the record text via the new API by decoding the compressed block using prefix sums
+        let record_index = new_record_section.bin_search_record_index(offset);
+        let rec_idx = record_index as usize;
+
+        let start_comp = new_record_section.record_index_prefix_sum[rec_idx].compressed_size;
+        let end_comp = new_record_section.record_index_prefix_sum[rec_idx + 1].compressed_size;
+        let comp_size = (end_comp - start_comp) as usize;
+
+        // Read compressed bytes from file at record_data_offset + start_comp
+        file.seek(SeekFrom::Start(new_record_section.record_data_offset + start_comp)).expect("seek new file");
+        let mut comp_buf = vec![0u8; comp_size];
+        file.read_exact(&mut comp_buf).expect("read compressed record");
+
+        // Decode using the legacy block decoder for parity
+        let decomp = mdict_tools::compressed_block::block::decode_block(&comp_buf).expect("decode record block");
+
+        // Compute decompressed offset inside the decompressed buffer
+        let uncompressed_before = new_record_section.record_index_prefix_sum[rec_idx].uncompressed_size;
+        let decomp_offset = (offset - uncompressed_before) as usize;
+
+        // Extract bytes until 0x0A 0x00 (same termination used in legacy parser)
+        let mut record_bytes = Vec::new();
+        for i in decomp_offset..decomp.len() {
+            if i + 1 < decomp.len() && decomp[i] == 0x0A && decomp[i + 1] == 0x00 {
+                break;
+            }
+            record_bytes.push(decomp[i]);
+        }
+
+        let new_text = std::str::from_utf8(&record_bytes).expect("utf8").to_string();
+
+        // Print debug info to console for inspection
+        println!("--- record parity debug ---");
+        println!("record_index = {}", record_index);
+        println!("compressed_size = {} bytes", comp_size);
+        print!("compressed (first up to 64 bytes): ");
+        for b in comp_buf.iter().take(std::cmp::min(64, comp_buf.len())) { print!("{:02x} ", b); }
+        println!();
+        println!("decompressed_len = {} bytes", decomp.len());
+        let show_len = std::cmp::min(128, decomp.len());
+        println!("decompressed (first {} bytes as UTF-8 lossily): {}", show_len, String::from_utf8_lossy(&decomp[..show_len]));
+        println!("old_text = {}", old_text);
+        println!("new_text = {}", new_text);
+        println!("--- end debug ---");
+
+        // They must match
+        assert_eq!(old_text, new_text, "record strings must match between old and new parsers");
+    }
 }
