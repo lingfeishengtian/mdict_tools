@@ -122,18 +122,12 @@ impl RecordSection {
 
     /// Binary-search for the record index containing `offset` (uncompressed offset)
     pub fn bin_search_record_index(&self, offset: u64) -> u64 {
-        let mut left: u64 = 0;
-        let mut right: u64 = self.record_index_prefix_sum.len() as u64 - 1;
-
-        while left < right {
-            let mid = left + (right - left) / 2;
-            if self.record_index_prefix_sum[mid as usize].uncompressed_size <= offset {
-                left = mid + 1;
-            } else {
-                right = mid;
-            }
-        }
-
-        left - 1
+        // Use the standard slice helper `partition_point` to find the first
+        // index where `uncompressed_size > offset`, then subtract one to get
+        // the record block that contains `offset`.
+        // This avoids hand-rolling the binary search loop.
+        let idx = self.record_index_prefix_sum.partition_point(|ri| ri.uncompressed_size <= offset);
+        // `idx` is at least 1 because we prepend a zero prefix entry during parse.
+        (idx - 1) as u64
     }
 }

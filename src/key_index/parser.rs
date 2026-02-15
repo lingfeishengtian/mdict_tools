@@ -53,7 +53,7 @@ impl KeyBlockInfo {
 #[derive(Clone)]
 pub struct KeyBlock {
     pub key_id: u64,
-    key_text: String,
+    pub key_text: String,
 }
 
 impl KeySection {

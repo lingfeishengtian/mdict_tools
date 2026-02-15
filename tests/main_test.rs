@@ -137,14 +137,33 @@ mod tests {
         let mut buf = vec![0u8; size];
         fh.read_from_file(offset, &mut buf).expect("read raw block");
 
-        // Decode with legacy decoder
+        // Print raw header bytes and parsed fields for debugging
+        if buf.len() >= 8 {
+            println!("raw header (first 8 bytes): {:?}", &buf[..8]);
+            let enc_le = u32::from_le_bytes(buf[0..4].try_into().unwrap());
+            let chk_be = u32::from_be_bytes(buf[4..8].try_into().unwrap());
+            println!("parsed header -> encoding (LE) = {} ; checksum (BE) = {}", enc_le, chk_be);
+        }
+
+        // Decode with legacy decoder (oracle)
         let old_decoded = mdict_tools::compressed_block::block::decode_block(&buf).expect("old decode");
+        let old_adler = minilzo_rs::adler32(&old_decoded);
+        println!("legacy decoded len = {} ; legacy adler32 = {}", old_decoded.len(), old_adler);
 
-        // Decode with new format decoder
-        let new_decoded = mdict_tools::format::decode_format_block(&buf).expect("new decode");
-
-        // They must match
-        assert_eq!(old_decoded, new_decoded, "decoded outputs must match between old and new decoders");
+        // Try decoding with the new format decoder and capture errors to print diagnostics
+        match mdict_tools::format::decode_format_block(&buf) {
+            Ok(new_decoded) => {
+                let new_adler = minilzo_rs::adler32(&new_decoded);
+                println!("new decoded len = {} ; new adler32 = {}", new_decoded.len(), new_adler);
+                assert_eq!(old_decoded, new_decoded, "decoded outputs must match between old and new decoders");
+            }
+            Err(e) => {
+                eprintln!("new decoder error: {:?}", e);
+                // Also compute adler32 of legacy output so we can compare
+                eprintln!("legacy adler32 = {} (expected)", old_adler);
+                panic!("new decoder failed: {:?}", e);
+            }
+        }
     }
 
     #[test]
@@ -220,5 +239,74 @@ mod tests {
 
         // They must match
         assert_eq!(old_text, new_text, "record strings must match between old and new parsers");
+    }
+
+    #[test]
+    fn mdict_api_basic() {
+        use mdict_tools::Mdict;
+
+        // Open the mdx using the new simple API
+        let mut md = Mdict::<File>::open("resources/jitendex/jitendex.mdx").expect("open mdict");
+
+        // Search for a short prefix (pick a common Japanese hiragana)
+        let prefix = "あ";
+        // we'll call `search_keys_prefix` below and handle errors there
+        use mdict_tools::file_reader::FileHandler;
+
+        // Prepare legacy/new parsed sections for comparison
+        let mut ctx = prepare();
+
+        // Try new API search and collect results for comparison
+        let new_results: Vec<(u64, String)> = match md.search_keys_prefix(prefix, 5) {
+            Ok(keys) => {
+                println!("[new api] search for prefix '{}' returned {} keys", prefix, keys.len());
+                let mut v = Vec::new();
+                for k in keys.iter() {
+                    println!("[new api] key_id={} key='{}'", k.key_id, k.key_text);
+                    v.push((k.key_id, k.key_text.clone()));
+                }
+                v
+            }
+            Err(e) => {
+                panic!("[new api] search keys error: {:?}", e);
+            }
+        };
+
+        // Use legacy parser API to list first few matching keys from the same file
+        let mut fh = FileHandler::open("resources/jitendex/jitendex.mdx").expect("open file for legacy read");
+
+        let mut legacy_results = Vec::new();
+        if let Some(mut ptr) = ctx.old_key_section.search_query(prefix, &mut fh) {
+            // Iterate using the legacy SearchResultPointer's `next` which returns `KeyBlock`
+            while let Some(kb) = ptr.next(&mut fh, &mut ctx.old_key_section) {
+                legacy_results.push((kb.key_id, kb.key_text.clone()));
+                if legacy_results.len() >= 5 { break; }
+            }
+        }
+
+        println!("[legacy] found {} keys starting with '{}'", legacy_results.len(), prefix);
+        for (id, text) in legacy_results.iter() {
+            println!("[legacy] key_id={} key='{}'", id, text);
+        }
+
+        // Now assert that the new API results match the legacy results
+        assert_eq!(new_results.len(), legacy_results.len(), "result count differs between new and legacy APIs");
+        if new_results != legacy_results {
+            // Print a helpful diff to aid debugging
+            println!("\n--- Result mismatch (new vs legacy) ---");
+            for i in 0..std::cmp::max(new_results.len(), legacy_results.len()) {
+                let n = new_results.get(i);
+                let l = legacy_results.get(i);
+                println!("idx {}: new={:?}  legacy={:?}", i, n, l);
+            }
+        }
+        assert_eq!(new_results, legacy_results, "search result tuples (key_id, key_text) must match");
+
+        // Fetch a sample record by an uncompressed offset used in other tests
+        let sample_offset: u64 = 280_887_285;
+        match md.record_at_uncompressed_offset(sample_offset) {
+            Ok(rec) => println!("[new api] record at {}: {}", sample_offset, rec),
+            Err(e) => println!("[new api] record_at_uncompressed_offset error: {:?}", e),
+        }
     }
 }

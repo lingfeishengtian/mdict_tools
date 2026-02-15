@@ -5,6 +5,7 @@ pub mod key_index;
 pub mod compressed_block;
 pub mod records;
 pub mod format;
+pub mod mdict_old;
 mod shared_macros;
 
 pub mod types;
