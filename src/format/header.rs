@@ -80,12 +80,12 @@ impl HeaderInfo {
     }
 
     /// Return the engine version as an enum similar to the legacy parser.
-    pub fn get_version(&self) -> crate::header::parser::MdictVersion {
+    pub fn get_version(&self) -> crate::types::MdictVersion {
         if let Some(version) = self.dict_info.get("GeneratedByEngineVersion") {
             match version.as_str() {
-                "1.0" => crate::header::parser::MdictVersion::V1,
-                "2.0" => crate::header::parser::MdictVersion::V2,
-                "3.0" => crate::header::parser::MdictVersion::V3,
+                "1.0" => crate::types::MdictVersion::V1,
+                "2.0" => crate::types::MdictVersion::V2,
+                "3.0" => crate::types::MdictVersion::V3,
                 _ => panic!("Unsupported version: {}", version),
             }
         } else {

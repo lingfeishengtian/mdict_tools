@@ -1,4 +1,3 @@
-use crate::file_reader::FileHandler;
 use crate::format::{HeaderInfo, KeySection};
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use binrw::BinRead;
@@ -47,66 +46,48 @@ struct RecordPairV2 {
 }
 
 impl RecordSection {
-    /// Parse the record index using `FileHandler` and `binrw` for the on-disk formats.
     /// Leaves `record_data_offset` pointing at the start of the record data area.
     pub fn parse<R: Read + Seek>(header_index: &HeaderInfo, key_index: &KeySection, reader: &mut R) -> RecordSection {
-        // offset starts at the section immediately following the key blocks
         let mut offset = key_index.next_section_offset;
 
-        let read_size = match header_index.get_version() {
-            crate::header::parser::MdictVersion::V1 => 4usize,
-            crate::header::parser::MdictVersion::V2 => 8usize,
-            crate::header::parser::MdictVersion::V3 => panic!("Unsupported version for records"),
-        };
-
-        // Read header (num blocks, entries, byte sizes)
-        let mut header_buf = vec![0u8; read_size * 4];
-        // seek + read_exact into buffer
+        let mut header_buf = vec![0u8; 8 * 4];
         reader.seek(SeekFrom::Start(offset)).unwrap();
         reader.read_exact(&mut header_buf).unwrap();
         offset += header_buf.len() as u64;
 
         let mut record_index = Vec::new();
+        let mut header_cur = Cursor::new(&header_buf);
 
-        if read_size == 4 {
-            let header: RecordHeaderV1 = RecordHeaderV1::read(&mut Cursor::new(&header_buf)).unwrap();
-            let num_blocks = header.num_record_blocks as usize;
-            let byte_size_record_index = header.byte_size_record_index as usize;
+        let (num_blocks, byte_size_record_index) = versioned_read_unwrap!(
+            header_index.get_version(), &mut header_cur,
+            v1: RecordHeaderV1,
+            v2: RecordHeaderV2,
+            as raw => { (raw.num_record_blocks as usize, raw.byte_size_record_index as usize) }
+        );
 
-            // Read the index blob containing `num_blocks` pairs
-            let mut index_buf = vec![0u8; byte_size_record_index];
-            reader.seek(SeekFrom::Start(offset)).unwrap();
-            reader.read_exact(&mut index_buf).unwrap();
-            offset += index_buf.len() as u64;
+        let mut index_buf = vec![0u8; byte_size_record_index];
+        reader.seek(SeekFrom::Start(offset)).unwrap();
+        reader.read_exact(&mut index_buf).unwrap();
+        offset += index_buf.len() as u64;
 
-            let mut cur = Cursor::new(&index_buf);
-            for _ in 0..num_blocks {
-                let pair: RecordPairV1 = RecordPairV1::read(&mut cur).unwrap();
-                let last = record_index.last().cloned().unwrap_or(RecordIndex { compressed_size: 0, uncompressed_size: 0 });
-                record_index.push(RecordIndex {
-                    compressed_size: last.compressed_size + pair.compressed_size as u64,
-                    uncompressed_size: last.uncompressed_size + pair.uncompressed_size as u64,
-                });
-            }
-        } else {
-            let header: RecordHeaderV2 = RecordHeaderV2::read(&mut Cursor::new(&header_buf)).unwrap();
-            let num_blocks = header.num_record_blocks as usize;
-            let byte_size_record_index = header.byte_size_record_index as usize;
-
-            let mut index_buf = vec![0u8; byte_size_record_index];
-            reader.seek(SeekFrom::Start(offset)).unwrap();
-            reader.read_exact(&mut index_buf).unwrap();
-            offset += index_buf.len() as u64;
-
-            let mut cur = Cursor::new(&index_buf);
-            for _ in 0..num_blocks {
-                let pair: RecordPairV2 = RecordPairV2::read(&mut cur).unwrap();
-                let last = record_index.last().cloned().unwrap_or(RecordIndex { compressed_size: 0, uncompressed_size: 0 });
-                record_index.push(RecordIndex {
-                    compressed_size: last.compressed_size + pair.compressed_size,
-                    uncompressed_size: last.uncompressed_size + pair.uncompressed_size,
-                });
-            }
+        let mut cur = Cursor::new(&index_buf);
+        for _ in 0..num_blocks {
+            // Use the versioned macro to read either V1 or V2 pair into
+            // `pair_raw` and coerce sizes to `u64` uniformly.
+            versioned_read_unwrap!(
+                header_index.get_version(), &mut cur,
+                v1: RecordPairV1,
+                v2: RecordPairV2,
+                as pair_raw => {
+                    let compressed = pair_raw.compressed_size as u64;
+                    let uncompressed = pair_raw.uncompressed_size as u64;
+                    let last = record_index.last().cloned().unwrap_or(RecordIndex { compressed_size: 0, uncompressed_size: 0 });
+                    record_index.push(RecordIndex {
+                        compressed_size: last.compressed_size + compressed,
+                        uncompressed_size: last.uncompressed_size + uncompressed,
+                    });
+                }
+            );
         }
 
         // Prepend zero entry to match previous prefix-sum shape

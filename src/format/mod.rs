@@ -1,3 +1,5 @@
+#[macro_use]
+pub mod versioned_binrw;
 pub mod header;
 pub mod key_index;
 pub mod compressed_block;
