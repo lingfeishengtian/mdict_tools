@@ -77,26 +77,12 @@ impl<R: Read + Seek> Mdict<R> {
             self.reader.seek(SeekFrom::Start(offset))?;
             self.reader.read_exact(&mut buf)?;
 
-            // decode using format decoder (matches on-disk format)
+            // decode and parse key block entries
             let decoded = crate::format::decode_format_block(&buf)?;
-
-            // parse entries: key_id (big-endian u64) followed by null-terminated key bytes
-            let mut off = 0usize;
-            while off + 8 <= decoded.len() {
-                let key_id = u64::from_be_bytes(decoded[off..off+8].try_into().unwrap());
-                off += 8;
-
-                // read until NUL (or end)
-                let start = off;
-                while off < decoded.len() && decoded[off] != 0 { off += 1; }
-                let key_text = String::from_utf8_lossy(&decoded[start..off]).to_string();
-                // advance past NUL if present
-                if off < decoded.len() && decoded[off] == 0 { off += 1; }
-
-                // only include keys that actually start with the requested prefix
-                if !key_text.starts_with(prefix) { continue; }
-
-                out.push(KeyBlock { key_id, key_text });
+            let entries = crate::format::parse_key_block(&decoded)?;
+            for kb in entries {
+                if !kb.key_text.starts_with(prefix) { continue; }
+                out.push(kb);
                 if out.len() >= max { return Ok(out); }
             }
         }

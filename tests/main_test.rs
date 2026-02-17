@@ -8,6 +8,17 @@ mod tests {
 
     const SAMPLE_PATH: &str = "resources/jitendex/jitendex.mdx";
 
+    fn get_record_for_key_id(md: &mut mdict_tools::Mdict<File>, key_id: u64) -> String {
+        let record = md.record_at_uncompressed_offset(key_id).unwrap_or_else(|_| "record not found".to_string());
+
+        if record.starts_with("@@@LINK=") {
+            let key_index = md.search_keys_prefix(record.strip_prefix("@@@LINK=").unwrap(), 1).unwrap_or_else(|_| vec![]);
+            return get_record_for_key_id(md, key_index.first().unwrap().key_id);
+        }
+
+        record
+    }
+
     #[test]
     fn print_new_header_and_key_index() {
         // Use only the new format API
@@ -133,6 +144,7 @@ mod tests {
         println!("[metrics] virt_delta  = {:.2} MB", virt_mb_delta);
         for kb in res.iter() {
             println!("[new api] key_id={} key='{}'", kb.key_id, kb.key_text);
+            println!("[new api] record for key_id {}: {}", kb.key_id, get_record_for_key_id(&mut md, kb.key_id));
         }
 
         // At least ensure the call succeeded; if you want stricter checks,
