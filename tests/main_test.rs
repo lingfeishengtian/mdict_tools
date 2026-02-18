@@ -7,13 +7,20 @@ mod tests {
     use sysinfo::{System, get_current_pid, ProcessesToUpdate};
 
     const SAMPLE_PATH: &str = "resources/jitendex/jitendex.mdx";
+    const SAMPLE_MDD_PATH: &str = "resources/jitendex/jitendex.mdd";
 
-    fn get_record_for_key_id(md: &mut mdict_tools::Mdict<File>, key_id: u64) -> String {
-        let record = md.record_at_uncompressed_offset(key_id).unwrap_or_else(|_| "record not found".to_string());
+    fn get_record_for_key_id(md: &mut mdict_tools::Mdict<File>, key_id: u64) -> Vec<u8> {
+        let record = md.record_at_uncompressed_offset(key_id).unwrap_or_else(|_| Vec::new());
 
-        if record.starts_with("@@@LINK=") {
-            let key_index = md.search_keys_prefix(record.strip_prefix("@@@LINK=").unwrap(), 1).unwrap_or_else(|_| vec![]);
-            return get_record_for_key_id(md, key_index.first().unwrap().key_id);
+        if let Some(suffix) = record.strip_prefix(b"@@@LINK=") {
+            // treat suffix as UTF-8 tag for searching; if invalid UTF-8, return empty
+            if let Ok(tag) = std::str::from_utf8(suffix) {
+                let key_index = md.search_keys_prefix(tag, 1).unwrap_or_else(|_| vec![]);
+                if let Some(k) = key_index.first() {
+                    return get_record_for_key_id(md, k.key_id);
+                }
+            }
+            return Vec::new();
         }
 
         record
@@ -105,7 +112,6 @@ mod tests {
         // Search using the public Mdict API for the prefix "辞書"
         let f = File::open(SAMPLE_PATH).expect("open mdx file");
 
-
         // prepare system info and record memory before the search
         let mut sys = System::new();
         let pid = get_current_pid().expect("get pid");
@@ -114,6 +120,7 @@ mod tests {
         let virt_before = sys.process(pid).map(|p| p.virtual_memory()).unwrap_or(0);
 
         let mut md = mdict_tools::Mdict::new(f).expect("open mdx via Mdict");
+
         let prefix = "辞書";
         println!("[new api] searching for prefix '{}', max 10", prefix);
 
@@ -144,11 +151,48 @@ mod tests {
         println!("[metrics] virt_delta  = {:.2} MB", virt_mb_delta);
         for kb in res.iter() {
             println!("[new api] key_id={} key='{}'", kb.key_id, kb.key_text);
-            println!("[new api] record for key_id {}: {}", kb.key_id, get_record_for_key_id(&mut md, kb.key_id));
+            let rec_bytes = get_record_for_key_id(&mut md, kb.key_id);
+            println!("[new api] record for key_id {}: {}", kb.key_id, String::from_utf8_lossy(&rec_bytes));
         }
 
         // At least ensure the call succeeded; if you want stricter checks,
         // assert on expected counts or specific key ids here.
         assert!(!res.is_empty(), "expected at least one key for prefix '{}'", prefix);
     }
+
+    #[test]
+    fn list_some_mdd_keys() {
+        // Use only the new format API
+        let mut file = File::open(SAMPLE_MDD_PATH).expect("open mdx file");
+        let header = mdict_tools::format::HeaderInfo::read_from(&mut file).expect("read header");
+
+        println!("New header dict_info_size = {}", header.dict_info_size);
+        println!("New header adler32 = {}", header.adler32_checksum);
+        println!("New header entries:");
+        for (k, v) in header.dict_info.iter() {
+            println!("  {} => {}", k, v);
+        }
+
+        // Read key index using the new API
+        let mut file = File::open(SAMPLE_MDD_PATH).expect("open mdx file");
+        let key_section = mdict_tools::format::KeySection::read_from(&mut file, &header).expect("read key section");
+
+        println!("KeySection: num_blocks = {} num_entries = {}", key_section.num_blocks, key_section.num_entries);
+        if !key_section.key_info_blocks.is_empty() {
+            let kb0 = &key_section.key_info_blocks[0];
+            println!("First key block[0]: num_entries={} first='{}' last='{}' comp={} decomp={}",
+                kb0.num_entries, kb0.first, kb0.last, kb0.compressed_size, kb0.decompressed_size);
+        }
+
+        // Print up to 8 blocks summary
+        let limit = std::cmp::min(8usize, key_section.key_info_blocks.len());
+        println!("Printing {} key blocks summaries:", limit);
+        for (i, kb) in key_section.key_info_blocks.iter().take(limit).enumerate() {
+            println!("block {}: num_entries={} first='{}' last='{}' comp={} decomp={}",
+                i, kb.num_entries, kb.first, kb.last, kb.compressed_size, kb.decompressed_size);
+        }
+    }
+    
+
+    
 }

@@ -79,6 +79,19 @@ impl HeaderInfo {
         self.dict_info.get(key)
     }
 
+    /// Return the declared encoding for dict info: `UTF-8` -> `Utf8`, otherwise default to `Utf16LE`.
+    pub fn get_encoding(&self) -> crate::types::Encoding {
+        if let Some(enc) = self.dict_info.get("Encoding") {
+            if enc.eq_ignore_ascii_case("UTF-8") {
+                crate::types::Encoding::Utf8
+            } else {
+                crate::types::Encoding::Utf16LE
+            }
+        } else {
+            crate::types::Encoding::Utf16LE
+        }
+    }
+
     /// Return the engine version as an enum similar to the legacy parser.
     pub fn get_version(&self) -> crate::types::MdictVersion {
         if let Some(version) = self.dict_info.get("GeneratedByEngineVersion") {
@@ -89,7 +102,8 @@ impl HeaderInfo {
                 _ => panic!("Unsupported version: {}", version),
             }
         } else {
-            panic!("GeneratedByEngineVersion not found in header");
+            // Assume its a mdd file
+            crate::types::MdictVersion::V2
         }
     }
 

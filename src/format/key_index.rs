@@ -56,23 +56,24 @@ struct KeySectionV2Raw {
 // Per-block raw structs for binrw parsing (two variants: v1 uses u8 sizes, v2 uses u16)
 #[binrw::binread]
 #[br(big)]
+#[br(import(char_width: usize))]
 #[derive(Debug)]
 struct KeyBlockInfoV1Raw {
     num_entries: u64,
 
     #[br(temp)]
     size_of_first: u8,
-    #[br(count = size_of_first as usize)]
+    #[br(count = size_of_first as usize * char_width)]
     first: Vec<u8>,
-    #[br(temp)]
-    first_null: u8,
+    #[br(temp, count = char_width)]
+    first_null: Vec<u8>,
 
     #[br(temp)]
     size_of_last: u8,
-    #[br(count = size_of_last as usize)]
+    #[br(count = size_of_last as usize * char_width)]
     last: Vec<u8>,
-    #[br(temp)]
-    last_null: u8,
+    #[br(temp, count = char_width)]
+    last_null: Vec<u8>,
 
     compressed_size: u64,
     decompressed_size: u64,
@@ -80,23 +81,24 @@ struct KeyBlockInfoV1Raw {
 
 #[binrw::binread]
 #[br(big)]
+#[br(import(char_width: usize))]
 #[derive(Debug)]
 struct KeyBlockInfoV2Raw {
     num_entries: u64,
 
     #[br(temp)]
     size_of_first: u16,
-    #[br(count = size_of_first as usize)]
+    #[br(count = size_of_first as usize * char_width)]
     first: Vec<u8>,
-    #[br(temp)]
-    first_null: u8,
+    #[br(temp, count = char_width)]
+    first_null: Vec<u8>,
 
     #[br(temp)]
     size_of_last: u16,
-    #[br(count = size_of_last as usize)]
+    #[br(count = size_of_last as usize * char_width)]
     last: Vec<u8>,
-    #[br(temp)]
-    last_null: u8,
+    #[br(temp, count = char_width)]
+    last_null: Vec<u8>,
 
     compressed_size: u64,
     decompressed_size: u64,
@@ -108,7 +110,7 @@ impl KeySection {
 
         let ver = header.get_version();
         let (num_blocks, num_entries, num_bytes_after_decomp_v2, key_info_block_size, key_blocks_size, addler32_checksum, mut key_info_buf) =
-            versioned_read_try!(ver, reader,
+            versioned_read!(ver, reader,
                 v1: KeySectionV1Raw,
                 v2: KeySectionV2Raw,
                 as raw => {
@@ -132,7 +134,7 @@ impl KeySection {
             key_info_buf = decompressed;
         }
 
-        let size_of_first_or_last = if num_bytes_after_decomp_v2.is_some() { 2usize } else { 1usize };
+        let size_of_first_or_last = header.get_encoding().char_width();
         let key_info_blocks = parse_key_info_binrw(ver, &key_info_buf, size_of_first_or_last)?;
 
         // Build prefix sum
@@ -166,13 +168,14 @@ fn parse_key_info_binrw(ver: crate::types::MdictVersion, buf: &[u8], size_of_fir
     let mut out = Vec::new();
 
     while (cur.position() as usize) < buf.len() {
-        versioned_read_unwrap!(
-            ver, &mut cur,
+        versioned_read_args!(
+            ver, &mut cur, import: (size_of_first_or_last,),
             v1: KeyBlockInfoV1Raw,
             v2: KeyBlockInfoV2Raw,
             as raw => {
-                let first = String::from_utf8(raw.first).map_err(|_| "invalid utf8 in first")?;
-                let last = String::from_utf8(raw.last).map_err(|_| "invalid utf8 in last")?;
+                let first = decode_key_text(raw.first, size_of_first_or_last)?;
+                let last = decode_key_text(raw.last, size_of_first_or_last)?;
+
                 out.push(KeyBlockInfo {
                     num_entries: raw.num_entries,
                     first,
@@ -185,4 +188,21 @@ fn parse_key_info_binrw(ver: crate::types::MdictVersion, buf: &[u8], size_of_fir
     }
 
     Ok(out)
+}
+
+// Helper to decode key text bytes into a `String` depending on `char_width`.
+// `char_width == 1` => UTF-8 single-byte; otherwise UTF-16LE (2-byte units).
+fn decode_key_text(buf: Vec<u8>, char_width: usize) -> Result<String> {
+    if char_width == 1 {
+        String::from_utf8(buf).map_err(|_| format!("invalid utf8").into())
+    } else {
+        if buf.len() % 2 != 0 {
+            return Err(format!("invalid utf16 length").into());
+        }
+        let u16_iter = buf.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]));
+        let s = std::char::decode_utf16(u16_iter)
+            .map(|r| r.unwrap_or('\u{FFFD}'))
+            .collect::<String>();
+        Ok(s)
+    }
 }

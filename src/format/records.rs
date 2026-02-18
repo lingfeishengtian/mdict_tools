@@ -1,4 +1,5 @@
 use crate::format::{HeaderInfo, KeySection};
+use crate::error::Result;
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 use binrw::BinRead;
 
@@ -47,18 +48,18 @@ struct RecordPairV2 {
 
 impl RecordSection {
     /// Leaves `record_data_offset` pointing at the start of the record data area.
-    pub fn parse<R: Read + Seek>(header_index: &HeaderInfo, key_index: &KeySection, reader: &mut R) -> RecordSection {
+    pub fn parse<R: Read + Seek>(header_index: &HeaderInfo, key_index: &KeySection, reader: &mut R) -> Result<RecordSection> {
         let mut offset = key_index.next_section_offset;
 
         let mut header_buf = vec![0u8; 8 * 4];
-        reader.seek(SeekFrom::Start(offset)).unwrap();
-        reader.read_exact(&mut header_buf).unwrap();
+        reader.seek(SeekFrom::Start(offset))?;
+        reader.read_exact(&mut header_buf)?;
         offset += header_buf.len() as u64;
 
         let mut record_index = Vec::new();
         let mut header_cur = Cursor::new(&header_buf);
 
-        let (num_blocks, byte_size_record_index) = versioned_read_unwrap!(
+        let (num_blocks, byte_size_record_index) = versioned_read!(
             header_index.get_version(), &mut header_cur,
             v1: RecordHeaderV1,
             v2: RecordHeaderV2,
@@ -66,15 +67,15 @@ impl RecordSection {
         );
 
         let mut index_buf = vec![0u8; byte_size_record_index];
-        reader.seek(SeekFrom::Start(offset)).unwrap();
-        reader.read_exact(&mut index_buf).unwrap();
+        reader.seek(SeekFrom::Start(offset))?;
+        reader.read_exact(&mut index_buf)?;
         offset += index_buf.len() as u64;
 
         let mut cur = Cursor::new(&index_buf);
         for _ in 0..num_blocks {
             // Use the versioned macro to read either V1 or V2 pair into
             // `pair_raw` and coerce sizes to `u64` uniformly.
-            versioned_read_unwrap!(
+            versioned_read!(
                 header_index.get_version(), &mut cur,
                 v1: RecordPairV1,
                 v2: RecordPairV2,
@@ -95,10 +96,10 @@ impl RecordSection {
         prefix.push(RecordIndex { compressed_size: 0, uncompressed_size: 0 });
         prefix.extend(record_index);
 
-        RecordSection {
+        Ok(RecordSection {
             record_data_offset: offset,
             record_index_prefix_sum: prefix,
-        }
+        })
     }
 
     /// Binary-search for the record index containing `offset` (uncompressed offset)

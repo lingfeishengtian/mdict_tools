@@ -16,6 +16,14 @@ pub enum MdictVersion {
     V1,
     V2,
     V3,
+    MDD,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    Utf8,
+    Utf16LE,
+    Unknown,
 }
 
 impl Default for MdictVersion {
@@ -30,6 +38,7 @@ impl MdictVersion {
             MdictVersion::V1 => 1,
             MdictVersion::V2 => 2,
             MdictVersion::V3 => 3,
+            MdictVersion::MDD => 2, // MDD files are essentially V2 format (with some differences in key fields)
         }
     }
 
@@ -40,6 +49,7 @@ impl MdictVersion {
             MdictVersion::V1 => 4usize,
             MdictVersion::V2 => 8usize,
             MdictVersion::V3 => panic!("Unsupported version for index sizes"),
+            MdictVersion::MDD => 8usize,
         }
     }
 
@@ -50,6 +60,28 @@ impl MdictVersion {
             MdictVersion::V1 => 1usize,
             MdictVersion::V2 => 2usize,
             MdictVersion::V3 => panic!("Unsupported version for key-info fields"),
+            MdictVersion::MDD => 2usize,
+        }
+    }
+
+    pub fn key_text_null_width(&self) -> usize {
+        match self {
+            MdictVersion::V1 => 1usize,
+            MdictVersion::V2 => 1usize,
+            MdictVersion::V3 => panic!("Unsupported version for key block fields"),
+            MdictVersion::MDD => 2usize,
+        }
+    }
+}
+
+impl Encoding {
+    /// Number of bytes per character unit for this encoding.
+    /// UTF-8 => 1, UTF-16LE => 2. Unknown defaults to 2 for MDD-like handling.
+    pub fn char_width(&self) -> usize {
+        match self {
+            Encoding::Utf8 => 1usize,
+            Encoding::Utf16LE => 2usize,
+            Encoding::Unknown => 2usize,
         }
     }
 }

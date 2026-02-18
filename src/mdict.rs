@@ -21,7 +21,7 @@ impl<R: Read + Seek> Mdict<R> {
         // Parse header and sections using format::* helpers
         let header = HeaderInfo::read_from(&mut reader)?;
         let key_section = KeySection::read_from(&mut reader, &header)?;
-        let record_section = RecordSection::parse(&header, &key_section, &mut reader);
+        let record_section = RecordSection::parse(&header, &key_section, &mut reader)?;
 
         Ok(Mdict {
             reader,
@@ -93,7 +93,7 @@ impl<R: Read + Seek> Mdict<R> {
     /// Retrieve a record string by an uncompressed (logical) offset into
     /// the record data area. This mirrors how the record parsing test
     /// extracts a record given an uncompressed offset.
-    pub fn record_at_uncompressed_offset(&mut self, offset_uncompressed: u64) -> Result<String> {
+    pub fn record_at_uncompressed_offset(&mut self, offset_uncompressed: u64) -> Result<Vec<u8>> {
         // Find which record block contains the uncompressed offset
         let rec_block = self.record_section.bin_search_record_index(offset_uncompressed) as usize;
 
@@ -121,7 +121,6 @@ impl<R: Read + Seek> Mdict<R> {
             record_bytes.push(decomp[i]);
         }
 
-        let s = String::from_utf8(record_bytes).map_err(|e| MDictError::from(format!("invalid utf8: {}", e)))?;
-        Ok(s)
+        Ok(record_bytes)
     }
 }
