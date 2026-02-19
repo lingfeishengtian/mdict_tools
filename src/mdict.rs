@@ -1,10 +1,10 @@
-use std::io::{Read, Seek, SeekFrom};
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::error::{Result, MDictError};
-use crate::types::KeyBlock;
+use crate::error::{MDictError, Result};
 use crate::format::{HeaderInfo, KeySection, RecordSection};
+use crate::types::{KeyBlock, MdictVersion};
 
 /// Public `Mdict` API using a generic `Read + Seek` reader.
 pub struct Mdict<R: Read + Seek> {
@@ -18,7 +18,6 @@ impl<R: Read + Seek> Mdict<R> {
     /// Create from an arbitrary reader implementing `Read + Seek`.
     /// This will parse the header, key index and record index eagerly.
     pub fn new(mut reader: R) -> Result<Self> {
-        // Parse header and sections using format::* helpers
         let header = HeaderInfo::read_from(&mut reader)?;
         let key_section = KeySection::read_from(&mut reader, &header)?;
         let record_section = RecordSection::parse(&header, &key_section, &mut reader)?;
@@ -41,86 +40,83 @@ impl<R: Read + Seek> Mdict<R> {
     ///
     /// This is a simple implementation that scans matching key blocks and
     /// decodes them on demand. It returns `types::KeyBlock` entries.
-    pub fn search_keys_prefix(&mut self, prefix: &str, max: usize) -> Result<Vec<KeyBlock>> {
-        let mut out = Vec::new();
-        // Compute once: key blocks area starts at `next_section_offset - total_key_blocks_size`.
-        let total_key_blocks_size = *self.key_section.key_info_prefix_sum.last().unwrap_or(&0u64);
-        let key_blocks_start = self.key_section.next_section_offset - total_key_blocks_size;
+    pub fn search_keys_prefix(
+        &mut self,
+        prefix: &str,
+    ) -> Result<impl Iterator<Item = Result<KeyBlock>> + '_> {
+        let it = crate::search::iterator_from_prefix(
+            &mut self.reader,
+            &self.header,
+            &self.key_section,
+            prefix,
+        )?;
 
-        // Binary search for the first block that might contain the prefix
-        let blocks = &self.key_section.key_info_blocks;
-        let n = blocks.len();
-        let start_idx = blocks.partition_point(|b| b.last.as_str() < prefix);
-
-        for i in start_idx..n {
-            let kb = &blocks[i];
-
-            // Early termination: if this block's first key is greater than the
-            // prefix and it doesn't start with the prefix then no subsequent
-            // block can contain matching keys (blocks ordered by first key).
-            if kb.first.as_str() > prefix && !kb.first.starts_with(prefix) {
-                break;
-            }
-
-            // cheap filter using block first/last (inclusive range check)
-            if !(kb.first.starts_with(prefix)
-                || kb.last.starts_with(prefix)
-                || (kb.first.as_str() <= prefix && kb.last.as_str() >= prefix))
-            {
-                continue;
-            }
-
-            // read and decode the key block
-            let offset = key_blocks_start + self.key_section.key_info_prefix_sum[i];
-            let size = kb.compressed_size as usize;
-            let mut buf = vec![0u8; size];
-            self.reader.seek(SeekFrom::Start(offset))?;
-            self.reader.read_exact(&mut buf)?;
-
-            // decode and parse key block entries
-            let decoded = crate::format::decode_format_block(&buf)?;
-            let entries = crate::format::parse_key_block(&decoded)?;
-            for kb in entries {
-                if !kb.key_text.starts_with(prefix) { continue; }
-                out.push(kb);
-                if out.len() >= max { return Ok(out); }
-            }
-        }
-
-        Ok(out)
+        Ok(it)
     }
 
-    /// Retrieve a record string by an uncompressed (logical) offset into
-    /// the record data area. This mirrors how the record parsing test
-    /// extracts a record given an uncompressed offset.
-    pub fn record_at_uncompressed_offset(&mut self, offset_uncompressed: u64) -> Result<Vec<u8>> {
-        // Find which record block contains the uncompressed offset
-        let rec_block = self.record_section.bin_search_record_index(offset_uncompressed) as usize;
+    /// Retrieve a record given a `KeyBlock`. This finds the next key block
+    /// (by key ordering) and treats the difference between the next key's
+    /// `key_id` and the provided `key_block.key_id` as the uncompressed
+    /// size to read starting at `key_block.key_id`.
+    pub fn record_at_key_block(&mut self, key_block: &KeyBlock) -> Result<Vec<u8>> {
+        let mut it = crate::search::iterator_from_key(
+            &mut self.reader,
+            &self.header,
+            &self.key_section,
+            &key_block.key_text,
+        )?;
+
+        let current_key_block = match it.next() {
+            Some(Ok(kb)) => kb,
+            Some(Err(e)) => return Err(e),
+            None => {
+                return Err(MDictError::KeyNotFound(format!(
+                    "key not found: {}",
+                    key_block.key_text
+                )))
+            }
+        };
+
+        let next_key_id = match it.next() {
+            Some(Ok(kb)) => Some(kb.key_id),
+            Some(Err(e)) => return Err(e),
+            None => None,
+        };
+
+        let current_key_id = current_key_block.key_id;
+
+        let rec_block = self.record_section.bin_search_record_index(current_key_id) as usize;
 
         let start_comp = self.record_section.record_index_prefix_sum[rec_block].compressed_size;
         let end_comp = self.record_section.record_index_prefix_sum[rec_block + 1].compressed_size;
         let comp_size = (end_comp - start_comp) as usize;
 
-        // Read compressed bytes
         let read_offset = self.record_section.record_data_offset + start_comp;
         let mut comp_buf = vec![0u8; comp_size];
         self.reader.seek(SeekFrom::Start(read_offset))?;
         self.reader.read_exact(&mut comp_buf)?;
-
-        // Decode compressed block using format decoder
         let decomp = crate::format::decode_format_block(&comp_buf)?;
 
-        // Compute offset inside decompressed buffer
-        let uncompressed_before = self.record_section.record_index_prefix_sum[rec_block].uncompressed_size;
-        let decomp_offset = (offset_uncompressed - uncompressed_before) as usize;
+        let uncompressed_before =
+            self.record_section.record_index_prefix_sum[rec_block].uncompressed_size;
+        let decomp_offset = (current_key_id - uncompressed_before) as usize;
 
-        // Extract up to terminator 0x0A 0x00 (legacy terminator)
-        let mut record_bytes = Vec::new();
-        for i in decomp_offset..decomp.len() {
-            if i + 1 < decomp.len() && decomp[i] == 0x0A && decomp[i + 1] == 0x00 { break; }
-            record_bytes.push(decomp[i]);
+        let bytes_available = decomp.len().saturating_sub(decomp_offset);
+        let bytes_to_take = match next_key_id {
+            Some(nk) => ((nk - current_key_id) as usize).min(bytes_available),
+            None => bytes_available,
+        };
+
+        let end = decomp_offset
+            .saturating_add(bytes_to_take)
+            .min(decomp.len());
+
+        let slice = &decomp[decomp_offset..end];
+
+        if self.header.get_version() != MdictVersion::MDD && slice.ends_with(&[0x0A, 0x00]) {
+            return Ok(Vec::from(&slice[..slice.len() - 2]))
         }
 
-        Ok(record_bytes)
+        Ok(Vec::from(slice))
     }
 }

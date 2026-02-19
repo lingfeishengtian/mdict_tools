@@ -28,13 +28,11 @@ pub fn decode_format_block(buf: &[u8]) -> Result<Vec<u8>> {
     let res = match encoding {
         0 => payload.to_vec(),
         1 => {
-            // LZO
             let lzo = LZO::init().map_err(|e| MDictError::InvalidFormat(format!("LZO init: {}", e)))?;
             lzo.decompress(payload, payload.len())
                 .map_err(|e| MDictError::InvalidFormat(format!("LZO decompress: {}", e)))?
         }
         2 => {
-            // Gzip/deflate wrapped in zlib stream
             DeflateDecoder::new(payload)
                 .decode_zlib()
                 .map_err(|e| MDictError::InvalidFormat(format!("deflate decode: {}", e)))?

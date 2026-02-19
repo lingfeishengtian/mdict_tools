@@ -1,7 +1,6 @@
 #[macro_export]
 macro_rules! versioned_read_args {
-    // Dispatch a BinRead::read between two versioned raw types and run
-    // the provided block with the parsed `raw` bound.
+    
 
     ($ver:expr, $reader:expr,
      import: $imp:expr,

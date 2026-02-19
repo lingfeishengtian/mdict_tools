@@ -3,3 +3,7 @@
 resources/jitendex/
 
 .DS_Store
+
+/test_output
+
+flamegraph.svg

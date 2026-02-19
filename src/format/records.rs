@@ -73,8 +73,6 @@ impl RecordSection {
 
         let mut cur = Cursor::new(&index_buf);
         for _ in 0..num_blocks {
-            // Use the versioned macro to read either V1 or V2 pair into
-            // `pair_raw` and coerce sizes to `u64` uniformly.
             versioned_read!(
                 header_index.get_version(), &mut cur,
                 v1: RecordPairV1,
@@ -90,8 +88,8 @@ impl RecordSection {
                 }
             );
         }
-
-        // Prepend zero entry to match previous prefix-sum shape
+        
+        
         let mut prefix = Vec::with_capacity(record_index.len() + 1);
         prefix.push(RecordIndex { compressed_size: 0, uncompressed_size: 0 });
         prefix.extend(record_index);
@@ -104,12 +102,8 @@ impl RecordSection {
 
     /// Binary-search for the record index containing `offset` (uncompressed offset)
     pub fn bin_search_record_index(&self, offset: u64) -> u64 {
-        // Use the standard slice helper `partition_point` to find the first
-        // index where `uncompressed_size > offset`, then subtract one to get
-        // the record block that contains `offset`.
-        // This avoids hand-rolling the binary search loop.
         let idx = self.record_index_prefix_sum.partition_point(|ri| ri.uncompressed_size <= offset);
-        // `idx` is at least 1 because we prepend a zero prefix entry during parse.
+
         (idx - 1) as u64
     }
 }

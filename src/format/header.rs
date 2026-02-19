@@ -26,7 +26,6 @@ fn parse_attributes(xml: &str) -> HashMap<String, String> {
                     } else {
                         format!("{}:{}", prefix, local)
                     };
-                    // xmlparser yields raw value; decode common entities to match legacy behavior
                     attributes.insert(key, unescape_xml(value.as_str()));
                 }
                 _ => {}
@@ -56,10 +55,8 @@ struct HeaderRaw {
 impl HeaderInfo {
     /// Read header from a `Read + Seek` source using `binrw` for the fixed layout.
     pub fn read_from<R: Read + Seek>(reader: &mut R) -> Result<Self> {
-        // Use binrw to read the structured header (big-endian fields)
         let raw: HeaderRaw = HeaderRaw::read(reader)?;
 
-        // Convert UTF-16LE bytes to Vec<u16>
         let buf16: Vec<u16> = raw.dict_info
             .chunks_exact(2)
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
@@ -102,8 +99,7 @@ impl HeaderInfo {
                 _ => panic!("Unsupported version: {}", version),
             }
         } else {
-            // Assume its a mdd file
-            crate::types::MdictVersion::V2
+            crate::types::MdictVersion::MDD
         }
     }
 

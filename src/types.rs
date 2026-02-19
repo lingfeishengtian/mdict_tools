@@ -38,7 +38,7 @@ impl MdictVersion {
             MdictVersion::V1 => 1,
             MdictVersion::V2 => 2,
             MdictVersion::V3 => 3,
-            MdictVersion::MDD => 2, // MDD files are essentially V2 format (with some differences in key fields)
+            MdictVersion::MDD => 2,
         }
     }
 

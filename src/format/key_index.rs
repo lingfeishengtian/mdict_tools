@@ -25,13 +25,13 @@ pub struct KeySection {
     pub addler32_checksum: u32,
 }
 
-// Outer header raw structs for binrw parsing
+ 
 #[derive(Debug, BinRead)]
 #[br(big)]
 struct KeySectionV1Raw {
     num_blocks: u32,
     num_entries: u32,
-    #[br(calc = 0)] // V1 does not have this field, so set to 0
+    #[br(calc = 0)]
     num_bytes_after_decomp_v2: u32,
     key_info_block_size: u32,
     key_blocks_size: u32,
@@ -53,7 +53,7 @@ struct KeySectionV2Raw {
     key_info: Vec<u8>,
 }
 
-// Per-block raw structs for binrw parsing (two variants: v1 uses u8 sizes, v2 uses u16)
+ 
 #[binrw::binread]
 #[br(big)]
 #[br(import(char_width: usize))]
@@ -137,7 +137,7 @@ impl KeySection {
         let size_of_first_or_last = header.get_encoding().char_width();
         let key_info_blocks = parse_key_info_binrw(ver, &key_info_buf, size_of_first_or_last)?;
 
-        // Build prefix sum
+        
         let mut prefix_sum = Vec::with_capacity(key_info_blocks.len() + 1);
         prefix_sum.push(0u64);
         let mut sum = 0u64;
@@ -145,7 +145,7 @@ impl KeySection {
             sum += kb.compressed_size;
             prefix_sum.push(sum);
         }
-        // Compute next_section_offset
+        
         let next_section_offset = key_info_offset + key_info_block_size + key_blocks_size;
 
         Ok(KeySection {
@@ -190,8 +190,7 @@ fn parse_key_info_binrw(ver: crate::types::MdictVersion, buf: &[u8], size_of_fir
     Ok(out)
 }
 
-// Helper to decode key text bytes into a `String` depending on `char_width`.
-// `char_width == 1` => UTF-8 single-byte; otherwise UTF-16LE (2-byte units).
+ 
 fn decode_key_text(buf: Vec<u8>, char_width: usize) -> Result<String> {
     if char_width == 1 {
         String::from_utf8(buf).map_err(|_| format!("invalid utf8").into())
