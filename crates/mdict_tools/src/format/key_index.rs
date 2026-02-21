@@ -1,8 +1,8 @@
-use std::io::{Read, Seek};
 use crate::error::Result;
-use crate::format::HeaderInfo;
 use crate::format::decode_format_block as decode_block;
+use crate::format::HeaderInfo;
 use binrw::BinRead;
+use std::io::{Read, Seek};
 
 #[derive(Debug, Clone)]
 pub struct KeyBlockInfo {
@@ -20,12 +20,12 @@ pub struct KeySection {
     pub next_section_offset: u64,
     pub key_info_blocks: Vec<KeyBlockInfo>,
     pub key_info_prefix_sum: Vec<u64>,
+    pub num_entries_prefix_sum: Vec<u64>,
     pub num_blocks: u64,
     pub num_entries: u64,
     pub addler32_checksum: u32,
 }
 
- 
 #[derive(Debug, BinRead)]
 #[br(big)]
 struct KeySectionV1Raw {
@@ -53,7 +53,6 @@ struct KeySectionV2Raw {
     key_info: Vec<u8>,
 }
 
- 
 #[binrw::binread]
 #[br(big)]
 #[br(import(char_width: usize))]
@@ -109,22 +108,29 @@ impl KeySection {
         reader.seek(std::io::SeekFrom::Start(header.size()))?;
 
         let ver = header.get_version();
-        let (num_blocks, num_entries, num_bytes_after_decomp_v2, key_info_block_size, key_blocks_size, addler32_checksum, mut key_info_buf) =
-            versioned_read!(ver, reader,
-                v1: KeySectionV1Raw,
-                v2: KeySectionV2Raw,
-                as raw => {
-                    (
-                        raw.num_blocks as u64,
-                        raw.num_entries as u64,
-                        if ver.major() >= 2 { Some(raw.num_bytes_after_decomp_v2 as u64) } else { None },
-                        raw.key_info_block_size as u64,
-                        raw.key_blocks_size as u64,
-                        raw.addler32_checksum,
-                        raw.key_info,
-                    )
-                }
-            );
+        let (
+            num_blocks,
+            num_entries,
+            num_bytes_after_decomp_v2,
+            key_info_block_size,
+            key_blocks_size,
+            addler32_checksum,
+            mut key_info_buf,
+        ) = versioned_read!(ver, reader,
+            v1: KeySectionV1Raw,
+            v2: KeySectionV2Raw,
+            as raw => {
+                (
+                    raw.num_blocks as u64,
+                    raw.num_entries as u64,
+                    if ver.major() >= 2 { Some(raw.num_bytes_after_decomp_v2 as u64) } else { None },
+                    raw.key_info_block_size as u64,
+                    raw.key_blocks_size as u64,
+                    raw.addler32_checksum,
+                    raw.key_info,
+                )
+            }
+        );
 
         let key_info_offset = reader.seek(std::io::SeekFrom::Current(0))? - key_info_block_size;
 
@@ -137,7 +143,6 @@ impl KeySection {
         let size_of_first_or_last = header.get_encoding().char_width();
         let key_info_blocks = parse_key_info_binrw(ver, &key_info_buf, size_of_first_or_last)?;
 
-        
         let mut prefix_sum = Vec::with_capacity(key_info_blocks.len() + 1);
         prefix_sum.push(0u64);
         let mut sum = 0u64;
@@ -145,7 +150,15 @@ impl KeySection {
             sum += kb.compressed_size;
             prefix_sum.push(sum);
         }
-        
+
+        let mut num_entries_prefix_sum = Vec::with_capacity(key_info_blocks.len() + 1);
+        num_entries_prefix_sum.push(0u64);
+        let mut entries_sum = 0u64;
+        for kb in &key_info_blocks {
+            entries_sum += kb.num_entries;
+            num_entries_prefix_sum.push(entries_sum);
+        }
+
         let next_section_offset = key_info_offset + key_info_block_size + key_blocks_size;
 
         Ok(KeySection {
@@ -154,6 +167,7 @@ impl KeySection {
             next_section_offset,
             key_info_blocks,
             key_info_prefix_sum: prefix_sum,
+            num_entries_prefix_sum,
             num_blocks,
             num_entries,
             addler32_checksum,
@@ -161,7 +175,11 @@ impl KeySection {
     }
 }
 
-fn parse_key_info_binrw(ver: crate::types::MdictVersion, buf: &[u8], size_of_first_or_last: usize) -> Result<Vec<KeyBlockInfo>> {
+fn parse_key_info_binrw(
+    ver: crate::types::MdictVersion,
+    buf: &[u8],
+    size_of_first_or_last: usize,
+) -> Result<Vec<KeyBlockInfo>> {
     use std::io::Cursor;
 
     let mut cur = Cursor::new(buf);
@@ -190,7 +208,6 @@ fn parse_key_info_binrw(ver: crate::types::MdictVersion, buf: &[u8], size_of_fir
     Ok(out)
 }
 
- 
 fn decode_key_text(buf: Vec<u8>, char_width: usize) -> Result<String> {
     if char_width == 1 {
         String::from_utf8(buf).map_err(|_| format!("invalid utf8").into())
@@ -198,7 +215,9 @@ fn decode_key_text(buf: Vec<u8>, char_width: usize) -> Result<String> {
         if buf.len() % 2 != 0 {
             return Err(format!("invalid utf16 length").into());
         }
-        let u16_iter = buf.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]));
+        let u16_iter = buf
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]));
         let s = std::char::decode_utf16(u16_iter)
             .map(|r| r.unwrap_or('\u{FFFD}'))
             .collect::<String>();
