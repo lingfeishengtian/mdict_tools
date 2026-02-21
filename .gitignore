@@ -1,9 +1,9 @@
-/target
+target
 
-resources/jitendex/
+crates/mdict_tools/resources/jitendex/
 
 .DS_Store
 
-/test_output
+test_output
 
 flamegraph.svg
