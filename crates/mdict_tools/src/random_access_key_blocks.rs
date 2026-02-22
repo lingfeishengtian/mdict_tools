@@ -5,9 +5,9 @@ use crate::format::{HeaderInfo, KeySection};
 use crate::types::KeyBlock;
 
 pub struct KeyBlockIndex {
-    header: HeaderInfo,
-    key_section: KeySection,
-    key_blocks_start: u64,
+    pub header: HeaderInfo,
+    pub key_section: KeySection,
+    pub key_blocks_start: u64,
 
     cached_block_idx: Option<usize>,
     cached_entries: Option<Vec<KeyBlock>>,
@@ -87,6 +87,25 @@ impl KeyBlockIndex {
         let offset = idx - num_entries_prefix_sum as usize;
 
         Ok(block.get(offset).cloned())
+    }
+
+    pub fn index_for(&mut self, reader: &mut (impl Read + Seek), key_text: &str) -> Result<Option<usize>> {
+        let blocks = &self.key_section.key_info_blocks;
+        let block_idx = blocks.partition_point(|b| b.last.as_str() < key_text);
+
+        if block_idx == 0 || block_idx > blocks.len() {
+            return Ok(None);
+        }
+
+        let block = self.load_block(reader, block_idx - 1)?;
+        let entry_idx = block.partition_point(|e| e.key_text.as_str() < key_text);
+
+        if entry_idx == block.len() || block[entry_idx].key_text != key_text {
+            Ok(None)
+        } else {
+            let global_idx = self.key_section.num_entries_prefix_sum[block_idx - 1] as usize + entry_idx;
+            Ok(Some(global_idx))
+        }
     }
 
     pub fn prefix_range_bounds(
