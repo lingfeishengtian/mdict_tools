@@ -5,6 +5,7 @@ use std::io;
 pub enum MDictError {
     Io(io::Error),
     InvalidFormat(String),
+    InvalidArgument(String),
     KeyNotFound(String),
     UnsupportedFeature(String),
 }

@@ -4,12 +4,9 @@ use crate::error::Result;
 use crate::format::{HeaderInfo, KeySection};
 use crate::types::KeyBlock;
 
-pub trait ReadSeek: Read + Seek {}
-impl<T: Read + Seek> ReadSeek for T {}
-pub struct KeyBlockIndex<'a> {
-    reader: &'a mut dyn ReadSeek,
-    header: &'a HeaderInfo,
-    key_section: &'a KeySection,
+pub struct KeyBlockIndex {
+    header: HeaderInfo,
+    key_section: KeySection,
     key_blocks_start: u64,
 
     cached_block_idx: Option<usize>,
@@ -17,18 +14,13 @@ pub struct KeyBlockIndex<'a> {
     read_buf: Vec<u8>,
 }
 
-impl<'a> KeyBlockIndex<'a> {
-    pub fn new(
-        reader: &'a mut dyn ReadSeek,
-        header: &'a HeaderInfo,
-        key_section: &'a KeySection,
-    ) -> Result<Self> {
+impl KeyBlockIndex {
+    pub fn new(header: HeaderInfo, key_section: KeySection) -> Result<Self> {
         let total_key_blocks_size = *key_section.key_info_prefix_sum.last().unwrap_or(&0);
 
         let key_blocks_start = key_section.next_section_offset - total_key_blocks_size;
 
         Ok(Self {
-            reader,
             header,
             key_section,
             key_blocks_start,
@@ -40,7 +32,11 @@ impl<'a> KeyBlockIndex<'a> {
 
     /// Ensure the requested block is decoded and cached, returning a reference
     /// to the cached entries.
-    fn load_block(&mut self, idx: usize) -> Result<&Vec<KeyBlock>> {
+    fn load_block(
+        &mut self,
+        reader: &mut (impl Read + Seek),
+        idx: usize,
+    ) -> Result<&Vec<KeyBlock>> {
         if self.cached_block_idx == Some(idx) {
             return Ok(self.cached_entries.as_ref().unwrap());
         }
@@ -52,8 +48,8 @@ impl<'a> KeyBlockIndex<'a> {
         self.read_buf.clear();
         self.read_buf.resize(size, 0);
 
-        self.reader.seek(SeekFrom::Start(offset))?;
-        self.reader.read_exact(&mut self.read_buf)?;
+        reader.seek(SeekFrom::Start(offset))?;
+        reader.read_exact(&mut self.read_buf)?;
 
         let decoded = crate::format::decode_format_block(&self.read_buf)?;
         let entries = crate::format::parse_key_block(&decoded, self.header.get_encoding())?;
@@ -64,153 +60,62 @@ impl<'a> KeyBlockIndex<'a> {
         Ok(self.cached_entries.as_ref().unwrap())
     }
 
-    fn find_candidate_block(&self, key: &str) -> Option<usize> {
+    fn find_candidate_block_for_prefix(&self, prefix: &str) -> Option<(usize, usize)> {
         let blocks = &self.key_section.key_info_blocks;
-        let idx = blocks.partition_point(|b| b.last.as_str() < key);
+        let idx = blocks.partition_point(|b| b.last.as_str() < prefix);
+        let idx_upper = blocks[idx..].partition_point(|b| b.first.starts_with(prefix));
+
         if idx >= blocks.len() {
             None
         } else {
-            Some(idx)
+            Some((idx, idx_upper))
         }
     }
 
-    /// Helper: find the candidate block for `key` and return a reference
-    /// to the (cached) entries for that block.
-    fn entries_for_key(&mut self, key: &str) -> Result<Option<(usize, &Vec<KeyBlock>)>> {
-        let block_idx = match self.find_candidate_block(key) {
-            Some(idx) => idx,
-            None => return Ok(None),
-        };
+    pub fn get(&mut self, reader: &mut (impl Read + Seek), idx: usize) -> Result<Option<KeyBlock>> {
+        let block_idx = self
+            .key_section
+            .num_entries_prefix_sum
+            .partition_point(|&x| x <= idx as u64);
+        let num_entries_prefix_sum = self.key_section.num_entries_prefix_sum[block_idx - 1];
 
-        let entries = self.load_block(block_idx)?;
-        Ok(Some((block_idx, entries)))
-    }
-
-    fn entries_for_exact_key(&mut self, key: &str) -> Result<Option<(usize, &Vec<KeyBlock>)>> {
-        let block_idx = match self.find_candidate_block(key) {
-            Some(idx) => idx,
-            None => return Ok(None),
-        };
-
-        let kb_info = &self.key_section.key_info_blocks[block_idx];
-
-        if kb_info.first.as_str() > key {
+        if block_idx >= self.key_section.key_info_blocks.len() {
             return Ok(None);
         }
 
-        let entries = self.load_block(block_idx)?;
-        Ok(Some((block_idx, entries)))
-    }
+        let block = self.load_block(reader, block_idx)?;
+        let offset = idx - num_entries_prefix_sum as usize;
 
-    pub fn get(&mut self, key: &str) -> Result<Option<KeyBlock>> {
-        let (_block_idx, entries) = match self.entries_for_exact_key(key)? {
-            Some(t) => t,
-            None => return Ok(None),
-        };
-
-        let pos = entries.partition_point(|e| e.key_text.as_str() < key);
-        if pos < entries.len() && entries[pos].key_text.as_str() == key {
-            Ok(Some(entries[pos].clone()))
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn get_as_index(&mut self, key: &str) -> Result<Option<usize>> {
-        let (block_idx, entries) = match self.entries_for_exact_key(key)? {
-            Some(t) => t,
-            None => return Ok(None),
-        };
-
-        let pos = entries.partition_point(|e| e.key_text.as_str() < key);
-
-        if pos < entries.len() && entries[pos].key_text.as_str() == key {
-            let index_before = self.key_section.key_info_prefix_sum[block_idx] as usize;
-            Ok(Some(index_before + pos))
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn lower_bound(&mut self, key: &str) -> Result<Option<KeyBlock>> {
-        let (_block_idx, entries) = match self.entries_for_key(key)? {
-            Some(t) => t,
-            None => return Ok(None),
-        };
-
-        let pos = entries.partition_point(|e| e.key_text.as_str() < key);
-
-        if pos < entries.len() {
-            Ok(Some(entries[pos].clone()))
-        } else {
-            Ok(None)
-        }
+        Ok(block.get(offset).cloned())
     }
 
     pub fn prefix_range_bounds(
         &mut self,
+        reader: &mut (impl Read + Seek),
         prefix: &str,
-    ) -> Result<(Option<KeyBlock>, Option<KeyBlock>)> {
+    ) -> Result<Option<(usize, usize)>> {
         // Find the candidate block that might contain keys with this prefix
-        let (block_idx, entries) = match self.entries_for_key(prefix)? {
-            Some((idx, entries)) => (idx, entries),
-            None => return Ok((None, None)),
-        };
-
-        // Find first key >= prefix
-        let lower_bound_pos = entries.partition_point(|e| e.key_text.as_str() < prefix);
-
-        // If no keys are >= prefix, return None for both bounds
-        if lower_bound_pos >= entries.len() {
-            return Ok((None, None));
-        }
-
-        // Get the first key that is >= prefix (lower bound)
-        let lower_key = entries[lower_bound_pos].clone();
-
-        // Find first key that does NOT start with prefix
-        let upper_bound_pos = entries[lower_bound_pos..]
-            .partition_point(|e| e.key_text.as_str().starts_with(prefix))
-            + lower_bound_pos;
-
-        // Get the first key that doesn't start with prefix (upper bound)
-        let upper_key = if upper_bound_pos < entries.len() {
-            Some(entries[upper_bound_pos].clone())
-        } else {
-            None
-        };
-
-        Ok((Some(lower_key), upper_key))
-    }
-
-    fn find_block_by_entry_index(&self, index: usize) -> Option<(usize, usize)> {
-        let prefix = &self.key_section.key_info_prefix_sum;
-
-        let block = prefix.partition_point(|&x| x <= index as u64);
-
-        if block >= prefix.len() {
-            return None;
-        }
-
-        let block_start = if block == 0 {
-            0
-        } else {
-            prefix[block - 1] as usize
-        };
-
-        let offset_in_block = index - block_start;
-
-        Some((block, offset_in_block))
-    }
-
-    pub fn get_by_index(&mut self, index: usize) -> Result<Option<KeyBlock>> {
-        let (block_idx, offset) = match self.find_block_by_entry_index(index) {
-            Some(v) => v,
+        let (lower_bound, upper_bound) = match self.find_candidate_block_for_prefix(prefix) {
+            Some(idx) => idx,
             None => return Ok(None),
         };
 
-        let entries = self.load_block(block_idx)?;
+        let block_entries_lower = self.key_section.num_entries_prefix_sum[lower_bound] as usize;
+        let block_entries_upper = self.key_section.num_entries_prefix_sum[upper_bound] as usize;
 
-        Ok(entries.get(offset).cloned())
+        let entries_lower = self.load_block(reader, lower_bound)?;
+        let lower_bound_pos = entries_lower.partition_point(|e| e.key_text.as_str() < prefix);
+
+        if lower_bound_pos >= entries_lower.len() {
+            return Ok(None);
+        }
+
+        let entries_upper = self.load_block(reader, upper_bound)?;
+        let upper_bound_pos = entries_upper.partition_point(|e| !e.key_text.starts_with(prefix));
+
+        let lower_index = block_entries_lower + lower_bound_pos;
+        let upper_index = block_entries_upper + upper_bound_pos;
+
+        Ok(Some((lower_index, upper_index)))
     }
 }

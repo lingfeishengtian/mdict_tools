@@ -4,14 +4,15 @@ use std::path::Path;
 
 use crate::error::{MDictError, Result};
 use crate::format::{HeaderInfo, KeySection, RecordSection};
+use crate::prefix_key_block_index::PrefixKeyBlockIndex;
+use crate::random_access_key_blocks::KeyBlockIndex;
 use crate::types::{KeyBlock, MdictVersion};
 
 /// Public `Mdict` API using a generic `Read + Seek` reader.
 pub struct Mdict<R: Read + Seek> {
-    reader: R,
-    pub header: HeaderInfo,
-    pub key_section: KeySection,
+    pub reader: R,
     pub record_section: RecordSection,
+    pub key_block_index: KeyBlockIndex,
 }
 
 impl<R: Read + Seek> Mdict<R> {
@@ -22,11 +23,12 @@ impl<R: Read + Seek> Mdict<R> {
         let key_section = KeySection::read_from(&mut reader, &header)?;
         let record_section = RecordSection::parse(&header, &key_section, &mut reader)?;
 
-        Ok(Mdict {
+        let key_block_index = KeyBlockIndex::new(header, key_section)?;
+
+        Ok(Self {
             reader,
-            header,
-            key_section,
             record_section,
+            key_block_index,
         })
     }
 
@@ -40,18 +42,8 @@ impl<R: Read + Seek> Mdict<R> {
     ///
     /// This is a simple implementation that scans matching key blocks and
     /// decodes them on demand. It returns `types::KeyBlock` entries.
-    pub fn search_keys_prefix(
-        &mut self,
-        prefix: &str,
-    ) -> Result<impl Iterator<Item = Result<KeyBlock>> + '_> {
-        let it = crate::search::iterator_from_prefix(
-            &mut self.reader,
-            &self.header,
-            &self.key_section,
-            prefix,
-        )?;
-
-        Ok(it)
+    pub fn search_keys_prefix(&mut self, prefix: &str) -> Result<PrefixKeyBlockIndex<'_, R>> {
+        PrefixKeyBlockIndex::new(self, prefix)
     }
 
     /// Retrieve a record given a `KeyBlock`. This finds the next key block
@@ -114,7 +106,7 @@ impl<R: Read + Seek> Mdict<R> {
         let slice = &decomp[decomp_offset..end];
 
         if self.header.get_version() != MdictVersion::MDD && slice.ends_with(&[0x0A, 0x00]) {
-            return Ok(Vec::from(&slice[..slice.len() - 2]))
+            return Ok(Vec::from(&slice[..slice.len() - 2]));
         }
 
         Ok(Vec::from(slice))
