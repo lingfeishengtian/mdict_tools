@@ -69,6 +69,8 @@ impl KeyBlockIndex {
         if idx >= blocks.len() {
             None
         } else {
+            // There is one case where the prefix == the last block.last, in which this triggers
+            let idx_upper = if idx_upper >= blocks.len() { blocks.len() - 1 } else { idx_upper };
             Some((idx, idx_upper))
         }
     }
