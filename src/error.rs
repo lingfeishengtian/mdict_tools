@@ -1,9 +1,12 @@
 use std::io;
 
+use boltffi::data;
+
 /// Basic error type for the library. Expand as the rewrite progresses.
 #[derive(Debug)]
+#[data]
 pub enum MDictError {
-    Io(io::Error),
+    Io(String),
     InvalidFormat(String),
     InvalidArgument(String),
     KeyNotFound(String),
@@ -12,7 +15,7 @@ pub enum MDictError {
 
 impl From<io::Error> for MDictError {
     fn from(e: io::Error) -> Self {
-        MDictError::Io(e)
+        MDictError::Io(e.to_string())
     }
 }
 

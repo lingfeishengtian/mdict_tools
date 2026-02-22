@@ -1,15 +1,16 @@
 #[cfg(test)]
 mod tests {
-    use mdict_tools::types::KeyBlock;
     use std::fs::{create_dir_all, File};
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::time::Instant;
+    use mdict_tools::types::KeyBlock;
+    use mdict_tools::{Mdict, format};
     use sysinfo::{get_current_pid, ProcessesToUpdate, System};
 
     const SAMPLE_PATH: &str = "resources/jitendex/jitendex.mdx";
     const SAMPLE_MDD_PATH: &str = "resources/jitendex/jitendex.mdd";
 
-    fn get_record_for_key_id(md: &mut mdict_tools::Mdict<File>, key_block: &KeyBlock) -> Vec<u8> {
+    fn get_record_for_key_id(md: &mut Mdict<File>, key_block: &KeyBlock) -> Vec<u8> {
         let rec = md
             .record_at_key_block(key_block)
             .unwrap_or_else(|_| Vec::new());
@@ -107,7 +108,7 @@ mod tests {
             );
         }
 
-        match mdict_tools::format::decode_format_block(&buf) {
+        match format::decode_format_block(&buf) {
             Ok(decompressed) => {
                 let adler = minilzo_rs::adler32(&decompressed);
                 println!("decoded len = {} ; adler32 = {}", decompressed.len(), adler);

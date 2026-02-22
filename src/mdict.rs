@@ -8,7 +8,6 @@ use crate::prefix_key_block_index::PrefixKeyBlockIndex;
 use crate::random_access_key_blocks::KeyBlockIndex;
 use crate::types::{KeyBlock, MdictVersion};
 
-/// Public `Mdict` API using a generic `Read + Seek` reader.
 pub struct Mdict<R: Read + Seek> {
     pub reader: R,
     pub record_section: RecordSection,
