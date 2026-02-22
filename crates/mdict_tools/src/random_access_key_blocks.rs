@@ -97,7 +97,7 @@ impl KeyBlockIndex {
         let blocks = &self.key_section.key_info_blocks;
         let block_idx = blocks.partition_point(|b| b.last.as_str() < key_text);
 
-        if block_idx > blocks.len() {
+        if block_idx >= blocks.len() {
             return Ok(None);
         }
 
