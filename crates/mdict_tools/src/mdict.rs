@@ -10,7 +10,7 @@ use crate::types::{KeyBlock, MdictVersion};
 
 /// Public `Mdict` API using a generic `Read + Seek` reader.
 pub struct Mdict<R: Read + Seek> {
-    pub(crate) reader: R,
+    pub reader: R,
     pub record_section: RecordSection,
     pub key_block_index: KeyBlockIndex,
 }

@@ -264,4 +264,18 @@ mod tests {
 
         println!("wrote {} bytes to test_output/mdd_record", rec.len());
     }
+
+    #[test]
+    fn write_all_keys_to_keys_txt() {
+        let f = File::open(SAMPLE_PATH).expect("open mdx file");
+        let mut md = mdict_tools::Mdict::new(f).expect("open mdx via Mdict");
+
+        let mut out = File::create("test_output/all_keys.txt").expect("create output file");
+
+        for i in 0..md.key_block_index.key_section.num_entries as usize {
+            if let Ok(Some(kb)) = md.key_block_index.get(&mut md.reader, i) {
+                writeln!(out, "{}", kb.key_text).expect("write key to file");
+            }
+        }
+    }
 }
