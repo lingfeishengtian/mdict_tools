@@ -19,6 +19,8 @@ impl<'a, R: Read + Seek> PrefixKeyBlockIndex<'a, R> {
             crate::error::MDictError::InvalidArgument("Prefix not found".to_string())
         })?;
 
+        println!("Prefix '{}' matches key blocks in range [{}, {})", prefix, start, end);
+
         Ok(Self {
             mdict,
             prefix: prefix.to_string(),

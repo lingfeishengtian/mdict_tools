@@ -95,6 +95,9 @@ impl<R: Read + Seek> Mdict<R> {
             return Ok(Vec::from(&slice[..slice.len() - 2]));
         }
 
+        println!("record_at_key_block: key='{}' current_key_id={} next_key_id={:?} rec_block={} read_offset={} comp_size={} decomp_offset={} bytes_available={} bytes_to_take={} slice_len={}",
+            key_block.key_text, current_key_id, next_key_id, rec_block, read_offset, comp_size, decomp_offset, bytes_available, bytes_to_take, slice.len());
+
         Ok(Vec::from(slice))
     }
 }

@@ -63,7 +63,8 @@ impl KeyBlockIndex {
     fn find_candidate_block_for_prefix(&self, prefix: &str) -> Option<(usize, usize)> {
         let blocks = &self.key_section.key_info_blocks;
         let idx = blocks.partition_point(|b| b.last.as_str() < prefix);
-        let idx_upper = blocks[idx..].partition_point(|b| b.first.starts_with(prefix));
+        let upper_bound_prefix = upper_bound_from_prefix(prefix).or_else(|| Some(prefix.to_string()))?;
+        let idx_upper = blocks.partition_point(|b| b.last.as_str() < upper_bound_prefix.as_str());
 
         if idx >= blocks.len() {
             None
@@ -76,14 +77,15 @@ impl KeyBlockIndex {
         let block_idx = self
             .key_section
             .num_entries_prefix_sum
-            .partition_point(|&x| x <= idx as u64);
-        let num_entries_prefix_sum = self.key_section.num_entries_prefix_sum[block_idx - 1];
+            .partition_point(|&x| x < idx as u64);
 
-        if block_idx >= self.key_section.key_info_blocks.len() {
+        if block_idx == 0 || block_idx > self.key_section.key_info_blocks.len() {
             return Ok(None);
         }
 
-        let block = self.load_block(reader, block_idx)?;
+        let num_entries_prefix_sum = self.key_section.num_entries_prefix_sum[block_idx - 1];
+
+        let block = self.load_block(reader, block_idx - 1)?;
         let offset = idx - num_entries_prefix_sum as usize;
 
         Ok(block.get(offset).cloned())
@@ -97,13 +99,13 @@ impl KeyBlockIndex {
             return Ok(None);
         }
 
-        let block = self.load_block(reader, block_idx - 1)?;
+        let block = self.load_block(reader, block_idx)?;
         let entry_idx = block.partition_point(|e| e.key_text.as_str() < key_text);
 
         if entry_idx == block.len() || block[entry_idx].key_text != key_text {
             Ok(None)
         } else {
-            let global_idx = self.key_section.num_entries_prefix_sum[block_idx - 1] as usize + entry_idx;
+            let global_idx = self.key_section.num_entries_prefix_sum[block_idx] as usize + entry_idx;
             Ok(Some(global_idx))
         }
     }
@@ -130,11 +132,39 @@ impl KeyBlockIndex {
         }
 
         let entries_upper = self.load_block(reader, upper_bound)?;
-        let upper_bound_pos = entries_upper.partition_point(|e| !e.key_text.starts_with(prefix));
+        let upper_bound_prefix = upper_bound_from_prefix(prefix).unwrap_or_else(|| prefix.to_string());
+        let upper_bound_pos = entries_upper.partition_point(|e| e.key_text.as_str() < upper_bound_prefix.as_str());
 
         let lower_index = block_entries_lower + lower_bound_pos;
         let upper_index = block_entries_upper + upper_bound_pos;
 
         Ok(Some((lower_index, upper_index)))
     }
+}
+
+fn upper_bound_from_prefix(prefix: &str) -> Option<String> {
+    for i in (0..prefix.len()).rev() {
+        if let Some(last_char_str) = prefix.get(i..) {
+            let rest_of_prefix = {
+                debug_assert!(prefix.is_char_boundary(i));
+                &prefix[0..i]
+            };
+
+            let last_char = last_char_str
+                .chars()
+                .next()
+                .expect("last_char_str will contain at least one char");
+            let Some(last_char_incr) = (last_char ..= char::MAX).nth(1) else {
+                // Last character is highest possible code point.
+                // Go to second-to-last character instead.
+                continue;
+            };
+            
+            let new_string = format!("{rest_of_prefix}{last_char_incr}");
+
+            return Some(new_string);
+        }
+    }
+
+    None
 }
