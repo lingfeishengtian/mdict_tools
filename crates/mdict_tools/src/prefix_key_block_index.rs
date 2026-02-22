@@ -73,4 +73,18 @@ impl<'a, R: Read + Seek> PrefixKeyBlockIndex<'a, R> {
     pub fn reset_cursor(&mut self) {
         self.cursor = 0;
     }
+
+    pub fn take(&mut self, n: usize) -> Result<Vec<KeyBlock>> {
+        let mut result = Vec::new();
+
+        for _ in 0..n {
+            if let Some(key_block) = self.next()? {
+                result.push(key_block);
+            } else {
+                break;
+            }
+        }
+        
+        Ok(result)
+    }
 }

@@ -142,16 +142,19 @@ mod tests {
 
         let start = Instant::now();
         let mut iter = md.search_keys_prefix(prefix).expect("search");
-        let res = iter.collect_to_vec().expect("collect results");
+        // let res = iter.collect_to_vec().expect("collect results");
         let elapsed = start.elapsed();
 
         sys.refresh_processes(ProcessesToUpdate::All, true);
         let mem_after = sys.process(pid).map(|p| p.memory()).unwrap_or(0);
         let virt_after = sys.process(pid).map(|p| p.virtual_memory()).unwrap_or(0);
+        
+        let len = iter.len();
+        let is_empty = iter.is_empty();
 
         println!(
             "[new api] found {} keys starting with '{}'",
-            res.len(),
+            len,
             prefix
         );
         let mem_mb_before = (mem_before as f64) / 1024.0 / 1024.0;
@@ -169,7 +172,7 @@ mod tests {
         println!("[metrics] virt_before = {:.2} MB", virt_mb_before);
         println!("[metrics] virt_after  = {:.2} MB", virt_mb_after);
         println!("[metrics] virt_delta  = {:.2} MB", virt_mb_delta);
-        for kb in res.iter().take(10) {
+        for kb in iter.take(10).unwrap_or(Vec::new()) {
             println!("[new api] key_id={} key='{}'", kb.key_id, kb.key_text);
             let rec_bytes = get_record_for_key_id(&mut md, &kb);
             println!(
@@ -180,7 +183,7 @@ mod tests {
         }
 
         assert!(
-            !res.is_empty(),
+            !is_empty,
             "expected at least one key for prefix '{}'",
             prefix
         );
