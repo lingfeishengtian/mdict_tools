@@ -81,16 +81,11 @@ impl KeyBlockIndex {
             .num_entries_prefix_sum
             .partition_point(|&x| x <= idx as u64);
 
-        if block_idx > self.key_section.key_info_blocks.len() {
+        if block_idx == 0 || block_idx > self.key_section.key_info_blocks.len() {
             return Ok(None);
         }
 
-        // TODO: I know we can make this logic cleaner by fixing the prefix sum to have 0 first
-        let num_entries_prefix_sum = if block_idx == 0 {
-            0
-        } else {
-            self.key_section.num_entries_prefix_sum[block_idx - 1]
-        };
+        let num_entries_prefix_sum = self.key_section.num_entries_prefix_sum[block_idx - 1];
 
         let block = self.load_block(reader, block_idx - 1)?;
         let offset = idx - num_entries_prefix_sum as usize;
