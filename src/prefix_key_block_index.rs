@@ -1,5 +1,7 @@
 use std::io::{Read, Seek};
 
+use boltffi::{data, export};
+
 use crate::Mdict;
 use crate::error::Result;
 use crate::types::KeyBlock;
@@ -7,12 +9,13 @@ use crate::types::KeyBlock;
 /// Internal, non-borrowing prefix view. Holds only index bounds and cursor
 /// so it can live without borrowing the containing `Mdict`.
 pub struct PrefixKeyBlockIndexInternal {
-    prefix: String,
-    start_index: usize,
-    end_index: usize,
-    cursor: usize,
+    pub prefix: String,
+    pub start_index: usize,
+    pub end_index: usize,
+    pub cursor: usize,
 }
 
+#[export]
 impl PrefixKeyBlockIndexInternal {
     pub fn new(prefix: String, start_index: usize, end_index: usize) -> Self {
         Self { prefix, start_index, end_index, cursor: 0 }

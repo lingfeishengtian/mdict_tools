@@ -16,11 +16,11 @@ pub struct MdictBundle {
 
 #[export]
 impl MdictBundle {
-    pub fn new(mdx_path: &str, mdd_path: Option<String>) -> Result<Self, MDictError> {
+    pub fn new(mdx_path: &str, mdd_path: &str) -> Result<Self, MDictError> {
         let mdx_file = File::open(mdx_path)?;
         let mdx_mmap = SeekableMmap::open(&mdx_file)?;
 
-        let mdd_mmap = if let Some(mdd_path) = mdd_path {
+        let mdd_mmap = if !mdd_path.is_empty() {
             let mdd_file = File::open(mdd_path)?;
             Some(SeekableMmap::open(&mdd_file)?)
         } else {
@@ -41,7 +41,7 @@ impl MdictBundle {
         })
     }
 
-    pub fn set_search_prefix(&mut self, prefix: String) -> Result<(), MDictError> {
+    pub fn set_search_prefix(&mut self, prefix: &str) -> Result<(), MDictError> {
         let prefix_index = self
             .mdx
             .key_block_index
@@ -82,7 +82,7 @@ impl MdictBundle {
         Ok(record_data)
     }
 
-    pub fn mdd_resource(&mut self, key: String) -> Result<Option<Vec<u8>>, MDictError> {
+    pub fn mdd_resource(&mut self, key: &str) -> Result<Option<Vec<u8>>, MDictError> {
         if let Some(mdd) = &mut self.mdd {
             let key_block_idx = mdd
                 .key_block_index
@@ -103,5 +103,9 @@ impl MdictBundle {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn current_mdx_prefix_key_index(&self) -> Option<&PrefixKeyBlockIndexInternal> {
+        self.current_mdx_prefix_key_index.as_ref()
     }
 }
