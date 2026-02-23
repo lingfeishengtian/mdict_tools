@@ -1,9 +1,9 @@
-use std::io;
+use crate::error::{MDictError, Result};
 use binrw::{BinRead, BinReaderExt};
-use crate::error::{Result, MDictError};
+use std::io;
 
-use zune_inflate::DeflateDecoder;
 use minilzo_rs::{adler32, LZO};
+use zune_inflate::DeflateDecoder;
 
 /// Header-only representation for a compressed-format block.
 #[derive(Debug, BinRead)]
@@ -28,17 +28,19 @@ pub fn decode_format_block(buf: &[u8]) -> Result<Vec<u8>> {
     let res = match encoding {
         0 => payload.to_vec(),
         1 => {
-            let lzo = LZO::init().map_err(|e| MDictError::InvalidFormat(format!("LZO init: {}", e)))?;
+            let lzo =
+                LZO::init().map_err(|e| MDictError::InvalidFormat(format!("LZO init: {}", e)))?;
             lzo.decompress(payload, payload.len())
                 .map_err(|e| MDictError::InvalidFormat(format!("LZO decompress: {}", e)))?
         }
-        2 => {
-            DeflateDecoder::new(payload)
-                .decode_zlib()
-                .map_err(|e| MDictError::InvalidFormat(format!("deflate decode: {}", e)))?
-        }
+        2 => DeflateDecoder::new(payload)
+            .decode_zlib()
+            .map_err(|e| MDictError::InvalidFormat(format!("deflate decode: {}", e)))?,
         other => {
-            return Err(MDictError::InvalidFormat(format!("unknown encoding: {}", other)));
+            return Err(MDictError::InvalidFormat(format!(
+                "unknown encoding: {}",
+                other
+            )));
         }
     };
 

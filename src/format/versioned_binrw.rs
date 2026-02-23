@@ -1,7 +1,5 @@
 #[macro_export]
 macro_rules! versioned_read_args {
-    
-
     ($ver:expr, $reader:expr,
      import: $imp:expr,
      v1: $V1:ty,

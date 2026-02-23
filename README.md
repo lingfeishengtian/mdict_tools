@@ -1,5 +1,7 @@
 # Cross Compiled Mdict Reader Library
 
+// TODO: Split into multiple crates
+
 MDX and MDD file reader library for Android, iOS, macOS, Linux, Windows, and WebAssembly.
 
 ## Features being developed

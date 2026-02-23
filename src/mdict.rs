@@ -50,13 +50,15 @@ impl<R: Read + Seek> Mdict<R> {
     /// `key_id` and the provided `key_block.key_id` as the uncompressed
     /// size to read starting at `key_block.key_id`.
     pub fn record_at_key_block(&mut self, key_block: &KeyBlock) -> Result<Vec<u8>> {
-        let index = self.key_block_index.index_for(&mut self.reader, &key_block.key_text)?.ok_or_else(|| {
-            MDictError::InvalidArgument("Key block not found".to_string())
-        })?;
+        let index = self
+            .key_block_index
+            .index_for(&mut self.reader, &key_block.key_text)?
+            .ok_or_else(|| MDictError::InvalidArgument("Key block not found".to_string()))?;
 
-        let current_key_block = self.key_block_index.get(&mut self.reader, index)?.ok_or_else(|| {
-            MDictError::InvalidArgument("Key block not found".to_string())
-        })?;
+        let current_key_block = self
+            .key_block_index
+            .get(&mut self.reader, index)?
+            .ok_or_else(|| MDictError::InvalidArgument("Key block not found".to_string()))?;
         let next_key_block = self.key_block_index.get(&mut self.reader, index + 1)?;
 
         let current_key_id = current_key_block.key_id;
@@ -90,12 +92,15 @@ impl<R: Read + Seek> Mdict<R> {
 
         let slice = &decomp[decomp_offset..end];
 
-        if self.key_block_index.header.get_version() != MdictVersion::MDD && slice.ends_with(&[0x0A, 0x00]) {
+        if self.key_block_index.header.get_version() != MdictVersion::MDD
+            && slice.ends_with(&[0x0A, 0x00])
+        {
             return Ok(Vec::from(&slice[..slice.len() - 2]));
         }
 
-        println!("record_at_key_block: key='{}' current_key_id={} next_key_id={:?} rec_block={} read_offset={} comp_size={} decomp_offset={} bytes_available={} bytes_to_take={} slice_len={}",
-            key_block.key_text, current_key_id, next_key_id, rec_block, read_offset, comp_size, decomp_offset, bytes_available, bytes_to_take, slice.len());
+        // Remove println that was in the original code
+        // println!("record_at_key_block: key='{}' current_key_id={} next_key_id={:?} rec_block={} read_offset={} comp_size={} decomp_offset={} bytes_available={} bytes_to_take={} slice_len={}",
+        //     key_block.key_text, current_key_id, next_key_id, rec_block, read_offset, comp_size, decomp_offset, bytes_available, bytes_to_take, slice.len());
 
         Ok(Vec::from(slice))
     }

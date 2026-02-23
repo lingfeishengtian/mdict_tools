@@ -1,15 +1,17 @@
 use std::io;
 
-use boltffi::{error};
-
 /// Basic error type for the library. Expand as the rewrite progresses.
-#[derive(Debug)]
-#[error]
+#[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum MDictError {
+    #[error("IO Error: {0}")]
     Io(String),
+    #[error("Invalid Format: {0}")]
     InvalidFormat(String),
+    #[error("Invalid Argument: {0}")]
     InvalidArgument(String),
+    #[error("Key Not Found: {0}")]
     KeyNotFound(String),
+    #[error("Unsupported Feature: {0}")]
     UnsupportedFeature(String),
 }
 

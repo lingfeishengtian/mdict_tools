@@ -1,7 +1,7 @@
-use crate::format::{HeaderInfo, KeySection};
 use crate::error::Result;
-use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use crate::format::{HeaderInfo, KeySection};
 use binrw::BinRead;
+use std::io::{self, Cursor, Read, Seek, SeekFrom};
 
 pub struct RecordSection {
     pub record_data_offset: u64,
@@ -48,7 +48,11 @@ struct RecordPairV2 {
 
 impl RecordSection {
     /// Leaves `record_data_offset` pointing at the start of the record data area.
-    pub fn parse<R: Read + Seek>(header_index: &HeaderInfo, key_index: &KeySection, reader: &mut R) -> Result<RecordSection> {
+    pub fn parse<R: Read + Seek>(
+        header_index: &HeaderInfo,
+        key_index: &KeySection,
+        reader: &mut R,
+    ) -> Result<RecordSection> {
         let mut offset = key_index.next_section_offset;
 
         let mut header_buf = vec![0u8; 8 * 4];
@@ -88,10 +92,12 @@ impl RecordSection {
                 }
             );
         }
-        
-        
+
         let mut prefix = Vec::with_capacity(record_index.len() + 1);
-        prefix.push(RecordIndex { compressed_size: 0, uncompressed_size: 0 });
+        prefix.push(RecordIndex {
+            compressed_size: 0,
+            uncompressed_size: 0,
+        });
         prefix.extend(record_index);
 
         Ok(RecordSection {
@@ -102,7 +108,9 @@ impl RecordSection {
 
     /// Binary-search for the record index containing `offset` (uncompressed offset)
     pub fn bin_search_record_index(&self, offset: u64) -> u64 {
-        let idx = self.record_index_prefix_sum.partition_point(|ri| ri.uncompressed_size <= offset);
+        let idx = self
+            .record_index_prefix_sum
+            .partition_point(|ri| ri.uncompressed_size <= offset);
 
         (idx - 1) as u64
     }

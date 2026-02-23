@@ -1,13 +1,15 @@
-pub mod mdict;
+uniffi::setup_scaffolding!();
+
 pub mod format;
+pub mod mdict;
 
 pub mod seekable_mmap;
 
-pub mod types;
 pub mod error;
-pub mod random_access_key_blocks;
-pub mod prefix_key_block_index;
 pub mod mdict_file;
- 
+pub mod prefix_key_block_index;
+pub mod random_access_key_blocks;
+pub mod types;
+
 pub use mdict::Mdict;
-// pub use mdict_file::MdictBundle;
+pub use mdict_file::MdictBundle;

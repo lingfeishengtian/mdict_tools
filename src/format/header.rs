@@ -1,16 +1,17 @@
+use crate::error::Result;
 use std::collections::HashMap;
 use std::io::{Read, Seek};
-use crate::error::Result;
 
 use binrw::BinRead;
-use xmlparser::{Tokenizer, Token};
+use xmlparser::{Token, Tokenizer};
 
 fn unescape_xml(value: &str) -> String {
-    value.replace("&quot;", "\"")
-         .replace("&apos;", "'")
-         .replace("&lt;", "<")
-         .replace("&gt;", ">")
-         .replace("&amp;", "&")
+    value
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 fn parse_attributes(xml: &str) -> HashMap<String, String> {
@@ -20,7 +21,12 @@ fn parse_attributes(xml: &str) -> HashMap<String, String> {
     for token in tokenizer {
         if let Ok(token) = token {
             match token {
-                Token::Attribute { prefix, local, value, .. } => {
+                Token::Attribute {
+                    prefix,
+                    local,
+                    value,
+                    ..
+                } => {
                     let key = if prefix.is_empty() {
                         local.to_string()
                     } else {
@@ -57,7 +63,8 @@ impl HeaderInfo {
     pub fn read_from<R: Read + Seek>(reader: &mut R) -> Result<Self> {
         let raw: HeaderRaw = HeaderRaw::read(reader)?;
 
-        let buf16: Vec<u16> = raw.dict_info
+        let buf16: Vec<u16> = raw
+            .dict_info
             .chunks_exact(2)
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
             .collect();

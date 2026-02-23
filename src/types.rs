@@ -1,20 +1,17 @@
-use boltffi::data;
-
 /// Small domain types for the new public API. Keep these minimal for the scaffold.
-#[derive(Debug, Clone)]
-#[data]
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct KeyBlock {
     pub key_id: u64,
     pub key_text: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, uniffi::Record)]
 pub struct SearchHit {
     pub key: KeyBlock,
     pub record: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum MdictVersion {
     V1,
     V2,
@@ -22,7 +19,7 @@ pub enum MdictVersion {
     MDD,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum Encoding {
     Utf8,
     Utf16LE,

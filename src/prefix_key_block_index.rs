@@ -1,10 +1,10 @@
 use std::io::{Read, Seek};
 
-use boltffi::{data, export};
+// Remove boltffi import
 
-use crate::Mdict;
 use crate::error::Result;
 use crate::types::KeyBlock;
+use crate::Mdict;
 
 /// Internal, non-borrowing prefix view. Holds only index bounds and cursor
 /// so it can live without borrowing the containing `Mdict`.
@@ -15,10 +15,14 @@ pub struct PrefixKeyBlockIndexInternal {
     pub cursor: usize,
 }
 
-#[export]
 impl PrefixKeyBlockIndexInternal {
     pub fn new(prefix: String, start_index: usize, end_index: usize) -> Self {
-        Self { prefix, start_index, end_index, cursor: 0 }
+        Self {
+            prefix,
+            start_index,
+            end_index,
+            cursor: 0,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -39,7 +43,11 @@ impl PrefixKeyBlockIndexInternal {
 
     pub fn get_global_index(&self, idx: usize) -> Option<usize> {
         let g = self.start_index.checked_add(idx)?;
-        if g < self.end_index { Some(g) } else { None }
+        if g < self.end_index {
+            Some(g)
+        } else {
+            None
+        }
     }
 
     pub fn next_global_index(&mut self) -> Option<usize> {
@@ -72,18 +80,24 @@ pub struct PrefixKeyBlockIndex<'a, R: Read + Seek> {
 
 impl<'a, R: Read + Seek> PrefixKeyBlockIndex<'a, R> {
     pub fn new(mdict: &'a mut Mdict<R>, prefix: &str) -> Result<Self> {
-        let (start, end) = mdict.key_block_index.prefix_range_bounds(&mut mdict.reader, prefix)?.ok_or_else(|| {
-            crate::error::MDictError::InvalidArgument("Prefix not found".to_string())
-        })?;
+        let (start, end) = mdict
+            .key_block_index
+            .prefix_range_bounds(&mut mdict.reader, prefix)?
+            .ok_or_else(|| {
+                crate::error::MDictError::InvalidArgument("Prefix not found".to_string())
+            })?;
 
-        println!("Prefix '{}' matches key blocks in range [{}, {})", prefix, start, end);
+        println!(
+            "Prefix '{}' matches key blocks in range [{}, {})",
+            prefix, start, end
+        );
 
         Ok(Self {
             mdict,
             inner: PrefixKeyBlockIndexInternal::new(prefix.to_string(), start, end),
         })
     }
-    
+
     pub fn len(&self) -> usize {
         self.inner.len()
     }
