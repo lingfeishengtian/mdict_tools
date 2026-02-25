@@ -34,6 +34,8 @@ mod tests {
         return rec;
     }
 
+
+
     #[test]
     fn print_new_header_and_key_index() {
         let mut file = File::open(SAMPLE_PATH).expect("open mdx file");
@@ -138,12 +140,14 @@ mod tests {
 
         let mut md = mdict_tools::Mdict::new(f).expect("open mdx via Mdict");
 
-        let prefix = "辞書";
+        let prefix = "あ";
         println!("[new api] searching for prefix '{}', max 10", prefix);
 
         let start = Instant::now();
         let mut iter = md.search_keys_prefix(prefix).expect("search");
         // let res = iter.collect_to_vec().expect("collect results");
+
+        println!("[len] {}", iter.len());
         let elapsed = start.elapsed();
 
         sys.refresh_processes(ProcessesToUpdate::All, true);
@@ -173,7 +177,7 @@ mod tests {
         println!("[metrics] virt_before = {:.2} MB", virt_mb_before);
         println!("[metrics] virt_after  = {:.2} MB", virt_mb_after);
         println!("[metrics] virt_delta  = {:.2} MB", virt_mb_delta);
-        for kb in iter.take(10).unwrap_or(Vec::new()) {
+        for kb in iter.take(100).unwrap_or(Vec::new()) {
             println!("[new api] key_id={} key='{}'", kb.key_id, kb.key_text);
             let rec_bytes = get_record_for_key_id(&mut md, &kb);
             println!(
