@@ -10,11 +10,12 @@ use fst::{IntoStreamer, Map, MapBuilder, Streamer};
 use memmap2::Mmap;
 use sorted_vec::{SortedSet, SortedVec};
 
-use crate::Mdict;
+use crate::mdx_conversion::records::RecordSection as MdxRecordSection;
 use crate::random_access_key_blocks::upper_bound_from_prefix;
+use crate::Mdict;
 
 pub fn create_fst_index<R: Read + Seek>(
-    mdict: Mdict<R>,
+    mdict: &mut Mdict<R>,
     readings_list: &HashMap<u64, HashSet<String>>,
     output_path: impl AsRef<Path>,
     prefix_output_path: impl AsRef<Path>,
@@ -52,6 +53,17 @@ pub fn create_fst_index<R: Read + Seek>(
     }
     prefix_writer.flush()?;
 
+    // Convert and write the record section to a separate file
+    let record_section = &mdict.record_section;
+    let new_record_section = MdxRecordSection::from_old_format(record_section);
+
+    // Write the record section manually without using binrw's write_to method that requires Seek
+    let record_output_file = File::create(record_output_path)?;
+    let mut record_writer = BufWriter::new(record_output_file);
+
+    new_record_section.write_to(&mut record_writer, &mut mdict.reader)?;
+    record_writer.flush()?;
+
     Ok(())
 }
 
@@ -61,12 +73,15 @@ pub struct FSTMap {
 }
 
 impl FSTMap {
-    pub fn load_from_path(path: impl AsRef<Path>, prefix_path: impl AsRef<Path>, record_path: impl AsRef<Path>) -> crate::error::Result<Self> {
+    pub fn load_from_path(
+        path: impl AsRef<Path>,
+        prefix_path: impl AsRef<Path>,
+        record_path: impl AsRef<Path>,
+    ) -> crate::error::Result<Self> {
         let mmap = unsafe { memmap2::Mmap::map(&File::open(path)?) }?;
         let map = Map::new(mmap)?;
 
         let values = unsafe { memmap2::Mmap::map(&File::open(prefix_path)?) }?;
-
 
         Ok(Self { map, values })
     }
@@ -76,7 +91,8 @@ impl FSTMap {
     }
 
     pub fn get_link_for_key<'a>(&'a self, key: &'a str) -> Stream<'a> {
-        self.map.range()
+        self.map
+            .range()
             .ge(key)
             .lt(upper_bound_from_prefix(key).unwrap())
             .into_stream()

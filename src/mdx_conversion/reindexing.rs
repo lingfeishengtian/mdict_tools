@@ -40,11 +40,7 @@ impl<R: Read + Seek> MdxReindexer<R> {
             return Ok(key_id);
         }
 
-        let key_id = self.mdict
-            .search_keys_prefix(link)?
-            .get(0)?
-            .unwrap()
-            .key_id;
+        let key_id = self.mdict.search_keys_prefix(link)?.get(0)?.unwrap().key_id;
 
         self.cached_link_to_key_id.insert(link.to_string(), key_id);
         Ok(key_id)
@@ -83,7 +79,8 @@ impl<R: Read + Seek> MdxReindexer<R> {
             let key_id = if let Some(link) = Self::extract_link(&record_as_string) {
                 self.key_id_for_link(link)?
             } else {
-                self.cached_link_to_key_id.insert(key_block.key_text, key_block.key_id);
+                self.cached_link_to_key_id
+                    .insert(key_block.key_text, key_block.key_id);
                 key_block.key_id
             };
 
@@ -139,26 +136,26 @@ impl<R: Read + Seek> MdxReindexer<R> {
     }
 }
 
+pub fn read_compressed_readings_list<P: AsRef<Path>>(
+    input_path: P,
+) -> Result<HashMap<u64, HashSet<String>>> {
+    let mut input_file = File::open(input_path.as_ref())?;
+    let mut contents = String::new();
+    input_file.read_to_string(&mut contents)?;
 
+    let mut readings_list = HashMap::new();
 
-    pub fn read_compressed_readings_list<P: AsRef<Path>>(input_path: P) -> Result<HashMap<u64, HashSet<String>>> {
-        let mut input_file = File::open(input_path.as_ref())?;
-        let mut contents = String::new();
-        input_file.read_to_string(&mut contents)?;
-
-        let mut readings_list = HashMap::new();
-
-        for line in contents.lines() {
-            if let Some((link, readings_str)) = line.split_once(": ") {
-                let readings: HashSet<String> =
-                    readings_str.split(", ").map(|s| s.to_string()).collect();
-                if let Ok(link_id) = link.parse::<u64>() {
-                    readings_list.insert(link_id, readings);
-                } else {
-                    eprintln!("Warning: Could not parse link ID from line: {}", line);
-                }
+    for line in contents.lines() {
+        if let Some((link, readings_str)) = line.split_once(": ") {
+            let readings: HashSet<String> =
+                readings_str.split(", ").map(|s| s.to_string()).collect();
+            if let Ok(link_id) = link.parse::<u64>() {
+                readings_list.insert(link_id, readings);
+            } else {
+                eprintln!("Warning: Could not parse link ID from line: {}", line);
             }
         }
-        
-        Ok(readings_list)
     }
+
+    Ok(readings_list)
+}

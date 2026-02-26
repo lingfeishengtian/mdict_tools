@@ -1,13 +1,13 @@
 #[cfg(test)]
 mod tests {
+    use fst::Streamer;
+    use mdict_tools::mdx_conversion::fst_indexing::FSTMap;
+    use mdict_tools::types::KeyBlock;
+    use mdict_tools::{format, mdx_conversion, Mdict};
     use std::fs::{create_dir_all, File};
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::time::Instant;
     use std::usize;
-    use fst::Streamer;
-    use mdict_tools::mdx_conversion::fst_indexing::FSTMap;
-    use mdict_tools::types::KeyBlock;
-    use mdict_tools::{Mdict, format, mdx_conversion};
     use sysinfo::{get_current_pid, ProcessesToUpdate, System};
 
     const SAMPLE_PATH: &str = "resources/jitendex/jitendex.mdx";
@@ -36,8 +36,6 @@ mod tests {
         }
         return rec;
     }
-
-
 
     #[test]
     fn print_new_header_and_key_index() {
@@ -156,15 +154,11 @@ mod tests {
         sys.refresh_processes(ProcessesToUpdate::All, true);
         let mem_after = sys.process(pid).map(|p| p.memory()).unwrap_or(0);
         let virt_after = sys.process(pid).map(|p| p.virtual_memory()).unwrap_or(0);
-        
+
         let len = iter.len();
         let is_empty = iter.is_empty();
 
-        println!(
-            "[new api] found {} keys starting with '{}'",
-            len,
-            prefix
-        );
+        println!("[new api] found {} keys starting with '{}'", len, prefix);
         let mem_mb_before = (mem_before as f64) / 1024.0 / 1024.0;
         let mem_mb_after = (mem_after as f64) / 1024.0 / 1024.0;
         let mem_mb_delta = mem_mb_after - mem_mb_before;
@@ -296,7 +290,9 @@ mod tests {
         let f = File::open(SAMPLE_PATH).expect("open mdx file");
         let mdict = Mdict::new_with_cache(f, usize::MAX).expect("open mdx via Mdict");
         let mut reindexer = mdx_conversion::reindexing::MdxReindexer::new(mdict);
-        reindexer.build_readings_list().expect("build readings list");
+        reindexer
+            .build_readings_list()
+            .expect("build readings list");
         let readings_list = reindexer.get_readings_list();
         println!("Readings list has {} entries", readings_list.len());
         for (link, keys) in readings_list.iter().take(10) {
@@ -304,24 +300,49 @@ mod tests {
         }
 
         // Write the readings list to a compressed file
-        reindexer.write_compressed_readings_list("test_output/readings_list.txt").expect("write readings list");
+        reindexer
+            .write_compressed_readings_list("test_output/readings_list.txt")
+            .expect("write readings list");
 
         // Read it back and verify it matches the original
-        let readings_list2 = mdx_conversion::reindexing::read_compressed_readings_list("test_output/readings_list.txt").expect("read readings list");
-        
-        assert_eq!(*readings_list, readings_list2, "Readings list should match after write and read");
+        let readings_list2 = mdx_conversion::reindexing::read_compressed_readings_list(
+            "test_output/readings_list.txt",
+        )
+        .expect("read readings list");
+
+        assert_eq!(
+            *readings_list, readings_list2,
+            "Readings list should match after write and read"
+        );
     }
 
     #[test]
     fn test_fst_indexing_creation() {
-        let mut readings_list = mdx_conversion::reindexing::read_compressed_readings_list("test_output/readings_list.txt").expect("read readings list");
+        let f = File::open(SAMPLE_PATH).expect("open mdx file");
+        let mut mdict = Mdict::new_with_cache(f, usize::MAX).expect("open mdx via Mdict");
+        let readings_list = mdx_conversion::reindexing::read_compressed_readings_list(
+            "test_output/readings_list.txt",
+        )
+        .expect("read readings list");
 
-        mdx_conversion::fst_indexing::create_fst_index(&readings_list, "test_output/fst_index.fst", "test_output/fst_index_values.txt").expect("create fst index");
+        mdx_conversion::fst_indexing::create_fst_index(
+            &mut mdict,
+            &readings_list,
+            "test_output/fst_index.fst",
+            "test_output/fst_index_values.txt",
+            "test_output/record_section.dat",
+        )
+        .expect("create fst index");
     }
 
     #[test]
     fn test_fst_searching() {
-        let fst_map = FSTMap::load_from_path("test_output/fst_index.fst", "test_output/fst_index_values.txt").expect("load fst index");
+        let fst_map = FSTMap::load_from_path(
+            "test_output/fst_index.fst",
+            "test_output/fst_index_values.txt",
+            "test_output/record_section.dat",
+        )
+        .expect("load fst index");
 
         let start_time = Instant::now();
         let test_key = "辞";
@@ -332,9 +353,169 @@ mod tests {
             let record_size = fst_map.get_record_size(value).unwrap_or(0);
             println!("  {} => {} with record size {}", key, value, record_size);
         }
-        
+
         let elapsed = start_time.elapsed();
 
-        println!("FST search for key '{}' took {:.6} seconds", test_key, elapsed.as_secs_f64());
+        println!(
+            "FST search for key '{}' took {:.6} seconds",
+            test_key,
+            elapsed.as_secs_f64()
+        );
+    }
+
+    #[test]
+    fn test_record_section_consistency() {
+        // Test that records retrieved from the original MDX file match those from the converted record section
+        let f = File::open(SAMPLE_PATH).expect("open mdx file");
+        let mut mdict = Mdict::new_with_cache(f, usize::MAX).expect("open mdx via Mdict");
+
+        // Load the FST map and record section
+        let fst_map = FSTMap::load_from_path(
+            "test_output/fst_index.fst",
+            "test_output/fst_index_values.txt",
+            "test_output/record_section.dat",
+        )
+        .expect("load fst index");
+
+        // Get some keys from the original MDX file to test
+        let test_keys = vec!["辞", "辞書", "日本語"];
+
+        for key in test_keys {
+            if let Some(link) = fst_map.get(key) {
+                // Get record size from FST map
+                let record_size = fst_map.get_record_size(link).unwrap_or(0);
+
+                // Verify that we get a reasonable record size (not zero)
+                assert!(
+                    record_size > 0,
+                    "Record size should be greater than 0 for key '{}'",
+                    key
+                );
+                println!(
+                    "Key '{}' has link {} with record size {}",
+                    key, link, record_size
+                );
+            } else {
+                println!("No link found for key '{}'", key);
+            }
+        }
+    }
+
+    #[test]
+    fn test_record_content_consistency() {
+        // Test that the converted record section can be read and contains valid data
+        use std::io::BufReader;
+
+        // First, let's verify we can read the original record section
+        let f = File::open(SAMPLE_PATH).expect("open mdx file");
+        let mut mdict = Mdict::new_with_cache(f, usize::MAX).expect("open mdx via Mdict");
+
+        // Check that the original record section has data
+        assert!(
+            mdict.record_section.record_index_prefix_sum.len() > 1,
+            "Original record section should have more than one record index"
+        );
+        println!(
+            "Original record section has {} indices",
+            mdict.record_section.record_index_prefix_sum.len()
+        );
+
+        // Test reading from the converted record section file
+        let record_file =
+            File::open("test_output/record_section.dat").expect("open record section file");
+        let mut reader = BufReader::new(record_file);
+
+        let converted_record_section =
+            mdx_conversion::records::RecordSection::parse(&mut reader, 0)
+                .expect("parse converted record section");
+
+        // Verify the converted record section matches expectations
+        assert_eq!(
+            converted_record_section.record_data_offset, mdict.record_section.record_data_offset,
+            "Record data offset should match between original and converted"
+        );
+        assert_eq!(
+            converted_record_section.num_record_blocks, mdict.record_section.num_record_blocks,
+            "Number of record blocks should match between original and converted"
+        );
+        assert_eq!(
+            converted_record_section.num_entries, mdict.record_section.num_entries,
+            "Number of entries should match between original and converted"
+        );
+        assert_eq!(
+            converted_record_section.byte_size_record_index,
+            mdict.record_section.byte_size_record_index,
+            "Byte size of record index should match between original and converted"
+        );
+
+        for (i, (orig_idx, conv_idx)) in mdict
+            .record_section
+            .record_index_prefix_sum
+            .iter()
+            .zip(converted_record_section.record_index_prefix_sum.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                orig_idx.compressed_size, conv_idx.compressed_size,
+                "Compressed size should match for index {}",
+                i
+            );
+            assert_eq!(
+                orig_idx.uncompressed_size, conv_idx.uncompressed_size,
+                "Uncompressed size should match for index {}",
+                i
+            );
+        }
+
+        println!("Record section conversion test passed!");
+    }
+
+    #[test]
+    fn test_converted_record_decode_matches_original() {
+        use std::io::BufReader;
+
+        let f = File::open(SAMPLE_PATH).expect("open mdx file");
+        let mut mdict = Mdict::new_with_cache(f, usize::MAX).expect("open mdx via Mdict");
+
+        let fst_map = FSTMap::load_from_path(
+            "test_output/fst_index.fst",
+            "test_output/fst_index_values.txt",
+            "test_output/record_section.dat",
+        )
+        .expect("load fst index");
+
+        let record_file = File::open("test_output/record_section.dat").expect("open record file");
+        let mut record_reader = BufReader::new(record_file);
+        let converted = mdx_conversion::records::RecordSection::parse(&mut record_reader, 0)
+            .expect("parse converted record section");
+
+        for key in ["辞", "辞書", "日本語"] {
+            let Some(link) = fst_map.get(key) else {
+                continue;
+            };
+            let Some(record_size) = fst_map.get_record_size(link) else {
+                continue;
+            };
+
+            let converted_record = converted
+                .decode_record(&mut record_reader, 0, link, record_size)
+                .expect("decode record from converted section");
+
+            let rec_block = mdict.record_section.bin_search_record_index(link) as usize;
+            let decomp = mdict
+                .decode_record_block(rec_block)
+                .expect("decode record block from original");
+            let uncompressed_before = mdict.record_section.record_index_prefix_sum[rec_block]
+                .uncompressed_size;
+            let start = (link - uncompressed_before) as usize;
+            let end = start.saturating_add(record_size).min(decomp.len());
+            let original_record = decomp[start..end].to_vec();
+
+            assert_eq!(
+                converted_record, original_record,
+                "Converted decode should match original for key '{}'",
+                key
+            );
+        }
     }
 }

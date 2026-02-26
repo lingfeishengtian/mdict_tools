@@ -6,6 +6,10 @@ use std::io::{self, Cursor, Read, Seek, SeekFrom};
 pub struct RecordSection {
     pub record_data_offset: u64,
     pub record_index_prefix_sum: Vec<RecordIndex>,
+    pub num_record_blocks: u64,
+    pub num_entries: u64,
+    pub byte_size_record_index: u64,
+    pub byte_size_record_data: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -63,11 +67,11 @@ impl RecordSection {
         let mut record_index = Vec::new();
         let mut header_cur = Cursor::new(&header_buf);
 
-        let (num_blocks, byte_size_record_index) = versioned_read!(
+        let (num_blocks, num_entries, byte_size_record_index, byte_size_record_data) = versioned_read!(
             header_index.get_version(), &mut header_cur,
             v1: RecordHeaderV1,
             v2: RecordHeaderV2,
-            as raw => { (raw.num_record_blocks as usize, raw.byte_size_record_index as usize) }
+            as raw => { (raw.num_record_blocks as usize, raw.num_entries as usize, raw.byte_size_record_index as usize, raw.byte_size_record_data as usize) }
         );
 
         let mut index_buf = vec![0u8; byte_size_record_index];
@@ -103,6 +107,10 @@ impl RecordSection {
         Ok(RecordSection {
             record_data_offset: offset,
             record_index_prefix_sum: prefix,
+            num_record_blocks: num_blocks as u64,
+            num_entries: num_entries as u64,
+            byte_size_record_index: byte_size_record_index as u64,
+            byte_size_record_data: byte_size_record_data as u64,
         })
     }
 
