@@ -156,7 +156,7 @@ impl KeyBlockIndex {
     }
 }
 
-fn upper_bound_from_prefix(prefix: &str) -> Option<String> {
+pub fn upper_bound_from_prefix(prefix: &str) -> Option<String> {
     for i in (0..prefix.len()).rev() {
         if let Some(last_char_str) = prefix.get(i..) {
             let rest_of_prefix = {

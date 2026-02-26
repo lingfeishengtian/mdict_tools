@@ -3,8 +3,11 @@ mod tests {
     use std::fs::{create_dir_all, File};
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::time::Instant;
+    use std::usize;
+    use fst::Streamer;
+    use mdict_tools::mdx_conversion::fst_indexing::FSTMap;
     use mdict_tools::types::KeyBlock;
-    use mdict_tools::{Mdict, format};
+    use mdict_tools::{Mdict, format, mdx_conversion};
     use sysinfo::{get_current_pid, ProcessesToUpdate, System};
 
     const SAMPLE_PATH: &str = "resources/jitendex/jitendex.mdx";
@@ -140,7 +143,7 @@ mod tests {
 
         let mut md = mdict_tools::Mdict::new(f).expect("open mdx via Mdict");
 
-        let prefix = "あ";
+        let prefix = "辞";
         println!("[new api] searching for prefix '{}', max 10", prefix);
 
         let start = Instant::now();
@@ -181,8 +184,9 @@ mod tests {
             println!("[new api] key_id={} key='{}'", kb.key_id, kb.key_text);
             let rec_bytes = get_record_for_key_id(&mut md, &kb);
             println!(
-                "[new api] record for key_id {}: {}",
+                "[new api] record for key_id {} record_size: {}: {}",
                 kb.key_id,
+                rec_bytes.len(),
                 String::from_utf8_lossy(&rec_bytes)
             );
         }
@@ -285,5 +289,52 @@ mod tests {
                 writeln!(out, "{}", kb.key_text).expect("write key to file");
             }
         }
+    }
+
+    #[test]
+    fn test_mdx_reindexer() {
+        let f = File::open(SAMPLE_PATH).expect("open mdx file");
+        let mdict = Mdict::new_with_cache(f, usize::MAX).expect("open mdx via Mdict");
+        let mut reindexer = mdx_conversion::reindexing::MdxReindexer::new(mdict);
+        reindexer.build_readings_list().expect("build readings list");
+        let readings_list = reindexer.get_readings_list();
+        println!("Readings list has {} entries", readings_list.len());
+        for (link, keys) in readings_list.iter().take(10) {
+            println!("Link '{}' has {} keys: {:?}", link, keys.len(), keys);
+        }
+
+        // Write the readings list to a compressed file
+        reindexer.write_compressed_readings_list("test_output/readings_list.txt").expect("write readings list");
+
+        // Read it back and verify it matches the original
+        let readings_list2 = mdx_conversion::reindexing::read_compressed_readings_list("test_output/readings_list.txt").expect("read readings list");
+        
+        assert_eq!(*readings_list, readings_list2, "Readings list should match after write and read");
+    }
+
+    #[test]
+    fn test_fst_indexing_creation() {
+        let mut readings_list = mdx_conversion::reindexing::read_compressed_readings_list("test_output/readings_list.txt").expect("read readings list");
+
+        mdx_conversion::fst_indexing::create_fst_index(&readings_list, "test_output/fst_index.fst", "test_output/fst_index_values.txt").expect("create fst index");
+    }
+
+    #[test]
+    fn test_fst_searching() {
+        let fst_map = FSTMap::load_from_path("test_output/fst_index.fst", "test_output/fst_index_values.txt").expect("load fst index");
+
+        let start_time = Instant::now();
+        let test_key = "辞";
+        let mut stream = fst_map.get_link_for_key_dedup(test_key);
+        println!("Links for key '{}':", test_key);
+
+        while let Some((key, value)) = stream.next() {
+            let record_size = fst_map.get_record_size(value).unwrap_or(0);
+            println!("  {} => {} with record size {}", key, value, record_size);
+        }
+        
+        let elapsed = start_time.elapsed();
+
+        println!("FST search for key '{}' took {:.6} seconds", test_key, elapsed.as_secs_f64());
     }
 }

@@ -17,6 +17,13 @@ binrw = "0.15.0"
 uniffi = { version = "0.31.0", features = ["cli"] }
 thiserror = "2.0.18"
 memmap2 = "0.9.10"
+rayon = "1.10.0"
+icu_provider = "2.1.1"
+icu = "2.1.1"
+fst = "0.4.7"
+fnv = "1.0.7"
+sorted-vec = "0.8.10"
+bytemuck = "1.25.0"
 
 [build-dependencies]
 uniffi = { version = "0.31.0", features = [ "build" ] }
@@ -28,3 +35,4 @@ path = "uniffi-bindgen.rs"
 [dev-dependencies]
 get-size2 = "0.7.4"
 sysinfo = "0.38.2"
+tempfile = "3.12.0"

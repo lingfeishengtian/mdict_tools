@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::iter::Map;
 use std::path::Path;
 
 use crate::error::{MDictError, Result};
@@ -12,12 +14,17 @@ pub struct Mdict<R: Read + Seek> {
     pub reader: R,
     pub record_section: RecordSection,
     pub key_block_index: KeyBlockIndex,
+
+    max_record_blocks_to_cache: usize,
+    cached_record_blocks: HashMap<usize, Vec<u8>>,
 }
 
 impl<R: Read + Seek> Mdict<R> {
-    /// Create from an arbitrary reader implementing `Read + Seek`.
-    /// This will parse the header, key index and record index eagerly.
-    pub fn new(mut reader: R) -> Result<Self> {
+    pub fn new(reader: R) -> Result<Self> {
+        Self::new_with_cache(reader, 0)
+    }
+
+    pub fn new_with_cache(mut reader: R, max_record_blocks_to_cache: usize) -> Result<Self> {
         let header = HeaderInfo::read_from(&mut reader)?;
         let key_section = KeySection::read_from(&mut reader, &header)?;
         let record_section = RecordSection::parse(&header, &key_section, &mut reader)?;
@@ -28,6 +35,9 @@ impl<R: Read + Seek> Mdict<R> {
             reader,
             record_section,
             key_block_index,
+
+            max_record_blocks_to_cache,
+            cached_record_blocks: HashMap::new(),
         })
     }
 
@@ -54,7 +64,10 @@ impl<R: Read + Seek> Mdict<R> {
             .key_block_index
             .index_for(&mut self.reader, &key_block.key_text)?
             .ok_or_else(|| MDictError::InvalidArgument("Key block not found".to_string()))?;
+        self.record_at_index(index)
+    }
 
+    pub fn record_at_index(&mut self, index: usize) -> Result<Vec<u8>> {
         let current_key_block = self
             .key_block_index
             .get(&mut self.reader, index)?
@@ -66,15 +79,7 @@ impl<R: Read + Seek> Mdict<R> {
 
         let rec_block = self.record_section.bin_search_record_index(current_key_id) as usize;
 
-        let start_comp = self.record_section.record_index_prefix_sum[rec_block].compressed_size;
-        let end_comp = self.record_section.record_index_prefix_sum[rec_block + 1].compressed_size;
-        let comp_size = (end_comp - start_comp) as usize;
-
-        let read_offset = self.record_section.record_data_offset + start_comp;
-        let mut comp_buf = vec![0u8; comp_size];
-        self.reader.seek(SeekFrom::Start(read_offset))?;
-        self.reader.read_exact(&mut comp_buf)?;
-        let decomp = crate::format::decode_format_block(&comp_buf)?;
+        let decomp = self.decode_record_block(rec_block)?;
 
         let uncompressed_before =
             self.record_section.record_index_prefix_sum[rec_block].uncompressed_size;
@@ -103,5 +108,34 @@ impl<R: Read + Seek> Mdict<R> {
         //     key_block.key_text, current_key_id, next_key_id, rec_block, read_offset, comp_size, decomp_offset, bytes_available, bytes_to_take, slice.len());
 
         Ok(Vec::from(slice))
+    }
+
+    pub fn decode_record_block(&mut self, rec_block: usize) -> Result<Vec<u8>> {
+        if self.cached_record_blocks.contains_key(&rec_block) {
+            return Ok(self.cached_record_blocks.get(&rec_block).unwrap().clone());
+        }
+
+        let start_comp = self.record_section.record_index_prefix_sum[rec_block].compressed_size;
+        let end_comp = self.record_section.record_index_prefix_sum[rec_block + 1].compressed_size;
+        let comp_size = (end_comp - start_comp) as usize;
+
+        let read_offset = self.record_section.record_data_offset + start_comp;
+        let mut comp_buf = vec![0u8; comp_size];
+        self.reader.seek(SeekFrom::Start(read_offset))?;
+        self.reader.read_exact(&mut comp_buf)?;
+        let decomp = crate::format::decode_format_block(&comp_buf)?;
+
+        if self.max_record_blocks_to_cache > 0 {
+            if self.cached_record_blocks.len() >= self.max_record_blocks_to_cache {
+                // Random eviction policy for simplicity
+                if let Some(key) = self.cached_record_blocks.keys().next().cloned() {
+                    self.cached_record_blocks.remove(&key);
+                }
+            }
+
+            self.cached_record_blocks.insert(rec_block, decomp.clone());
+        }
+
+        Ok(decomp)
     }
 }

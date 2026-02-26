@@ -1,4 +1,9 @@
-use std::{fs::File, io::{Read, Seek}, iter::Map, sync::{Arc, Mutex}};
+use std::{
+    fs::File,
+    io::{Read, Seek},
+    iter::Map,
+    sync::{Arc, Mutex},
+};
 
 use crate::{
     error::MDictError, prefix_key_block_index::PrefixKeyBlockIndexInternal,
@@ -40,8 +45,12 @@ pub fn create_mdict_bundle(mdx_path: String, mdd_path: String) -> Result<MdictBu
 }
 
 impl<R: Read + Seek> Mdict<R> {
-    pub fn prefix_range_bounds(&mut self, prefix: &str) -> Result<Option<(usize, usize)>, MDictError> {
-        self.key_block_index.prefix_range_bounds(&mut self.reader, prefix)
+    pub fn prefix_range_bounds(
+        &mut self,
+        prefix: &str,
+    ) -> Result<Option<(usize, usize)>, MDictError> {
+        self.key_block_index
+            .prefix_range_bounds(&mut self.reader, prefix)
     }
 
     pub fn get(&mut self, index: usize) -> Result<Option<KeyBlock>, MDictError> {
@@ -57,29 +66,26 @@ impl MdictBundle {
         let prefix_index = mdx.prefix_range_bounds(prefix)?.ok_or_else(|| {
             MDictError::InvalidArgument(format!("Prefix '{}' not found in MDX", prefix))
         })?;
-        
-        *self.current_mdx_prefix_key_index.lock().unwrap() = Some(PrefixKeyBlockIndexInternal::new(
-            prefix.to_string(),
-            prefix_index.0,
-            prefix_index.1,
-        ));
+
+        *self.current_mdx_prefix_key_index.lock().unwrap() = Some(
+            PrefixKeyBlockIndexInternal::new(prefix.to_string(), prefix_index.0, prefix_index.1),
+        );
         Ok(())
     }
 
-    pub fn prefix_search_result_get(
-        &self,
-        index: u64,
-    ) -> Result<Option<KeyBlock>, MDictError> {
+    pub fn prefix_search_result_get(&self, index: u64) -> Result<Option<KeyBlock>, MDictError> {
         let prefix_index_guard = self.current_mdx_prefix_key_index.lock().unwrap();
         let prefix_index = prefix_index_guard
             .as_ref()
             .ok_or_else(|| MDictError::InvalidArgument("Search prefix not set".to_string()))?;
 
-        let global_index = prefix_index.get_global_index(index as usize).ok_or_else(|| {
-            MDictError::InvalidArgument(
-                "Index out of bounds for current prefix search results".to_string(),
-            )
-        })?;
+        let global_index = prefix_index
+            .get_global_index(index as usize)
+            .ok_or_else(|| {
+                MDictError::InvalidArgument(
+                    "Index out of bounds for current prefix search results".to_string(),
+                )
+            })?;
         drop(prefix_index_guard);
 
         let mut mdx = self.mdx.lock().unwrap();

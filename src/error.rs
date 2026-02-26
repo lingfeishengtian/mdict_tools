@@ -39,4 +39,18 @@ impl From<String> for MDictError {
     }
 }
 
+impl From<fst::Error> for MDictError {
+    fn from(e: fst::Error) -> Self {
+        MDictError::InvalidFormat(e.to_string())
+    }
+}
+
+impl From<bytemuck::PodCastError> for MDictError {
+    fn from(e: bytemuck::PodCastError) -> Self {
+        MDictError::InvalidFormat(e.to_string())
+    }
+}
+
+
+
 pub type Result<T> = std::result::Result<T, MDictError>;
