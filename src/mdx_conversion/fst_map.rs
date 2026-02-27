@@ -16,22 +16,37 @@ use crate::Mdict;
 
 pub struct FSTMap {
     map: Map<Mmap>,
-    values: Mmap,
-    readings_file: Option<Mmap>,
+    readings_file: Mmap,
+    record_section: MdxRecordSection,
+}
+
+#[derive(Debug)]
+pub struct ReadingsEntry {
+    pub length: u32,
+    pub link_id: u64,
+    pub readings: Vec<String>,
 }
 
 impl FSTMap {
     pub fn load_from_path(
         path: impl AsRef<Path>,
-        prefix_path: impl AsRef<Path>,
+        readings_path: impl AsRef<Path>,
         record_path: impl AsRef<Path>,
     ) -> crate::error::Result<Self> {
         let mmap = unsafe { memmap2::Mmap::map(&File::open(path)?) }?;
         let map = Map::new(mmap)?;
 
-        let values = unsafe { memmap2::Mmap::map(&File::open(prefix_path)?) }?;
+        let readings_file = unsafe { memmap2::Mmap::map(&File::open(readings_path)?) }?;
 
-        Ok(Self { map, values })
+        // Load the record section
+        let mut record_file = File::open(record_path)?;
+        let record_section = MdxRecordSection::parse(&mut record_file, 0)?;
+
+        Ok(Self {
+            map,
+            readings_file,
+            record_section,
+        })
     }
 
     pub fn get(&self, key: &str) -> Option<u64> {
@@ -50,20 +65,61 @@ impl FSTMap {
         DedupStream::new(self.get_link_for_key(key))
     }
 
-    fn value_slice(&self) -> crate::error::Result<&[u64]> {
-        Ok(try_cast_slice::<u8, u64>(&self.values)?)
+    pub fn get_record<R: Read + Seek>(
+        &self,
+        link: u64,
+        reader: &mut R,
+        record_size: Option<u64>,
+    ) -> Option<Vec<u8>> {
+        self.record_section
+            .decode_record(reader, 0, link, record_size)
+            .ok()
     }
 
-    pub fn get_record_size(&self, link: u64) -> Option<usize> {
-        let values = self.value_slice().ok()?;
+    pub fn get_readings(&self, offset: u64) -> Option<(ReadingsEntry, Option<u64>)> {
+        let readings_file = &self.readings_file;
+        let offset = usize::try_from(offset).ok()?;
+        let header_end = offset.checked_add(12)?;
 
-        let idx = values.partition_point(|&v| v < link);
-        if idx < values.len() && values[idx] == link {
-            println!("Found link {} at index {}", link, idx);
-            Some(values[idx + 1] as usize - values[idx] as usize)
-        } else {
-            None
+        if header_end > readings_file.len() {
+            return None;
         }
+
+        let length = u32::from_le_bytes(readings_file[offset..offset + 4].try_into().ok()?) as usize;
+        let link_id = u64::from_le_bytes(readings_file[offset + 4..offset + 12].try_into().ok()?);
+
+        let string_start = header_end;
+        let string_end = string_start.checked_add(length)?;
+
+        if string_end > readings_file.len() {
+            return None;
+        }
+
+        let readings = readings_file[string_start..string_end]
+            .split(|&byte| byte == 0)
+            .filter(|segment| !segment.is_empty())
+            .filter_map(|segment| std::str::from_utf8(segment).ok())
+            .map(str::to_owned)
+            .collect();
+
+        let next_link_offset = string_end.checked_add(4)?;
+        let record_size = next_link_offset
+            .checked_add(8)
+            .filter(|&next_link_end| next_link_end <= readings_file.len())
+            .and_then(|next_link_end| {
+                let next_link_id =
+                    u64::from_le_bytes(readings_file[next_link_offset..next_link_end].try_into().ok()?);
+                Some(next_link_id - link_id)
+            });
+
+        Some((
+            ReadingsEntry {
+                length: length as u32,
+                link_id,
+                readings,
+            },
+            record_size,
+        ))
     }
 }
 

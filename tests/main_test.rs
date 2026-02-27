@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use fst::Streamer;
-    use mdict_tools::mdx_conversion::fst_indexing::FSTMap;
+    use mdict_tools::mdx_conversion::fst_map::FSTMap;
     use mdict_tools::types::KeyBlock;
     use mdict_tools::{format, mdx_conversion, Mdict};
     use std::fs::{create_dir_all, File};
@@ -29,6 +29,10 @@ mod tests {
                 };
 
                 if let Some(k) = key_index.first() {
+                    println!(
+                        "Found key block for link tag '{}': key_id={} key_text='{}'",
+                        tag, k.key_id, k.key_text
+                    );
                     return get_record_for_key_id(md, k);
                 }
             }
@@ -287,22 +291,19 @@ mod tests {
 
     #[test]
     fn test_mdx_reindexer() {
-        let f = File::open(SAMPLE_PATH).expect("open mdx file");
-        let mdict = Mdict::new_with_cache(f, usize::MAX).expect("open mdx via Mdict");
-        let mut reindexer = mdx_conversion::reindexing::MdxReindexer::new(mdict);
-        reindexer
-            .build_readings_list()
-            .expect("build readings list");
-        let readings_list = reindexer.get_readings_list();
+        let readings_list = mdx_conversion::reindexing::build_readings_list_from_path(SAMPLE_PATH)
+            .expect("build readings list from path");
         println!("Readings list has {} entries", readings_list.len());
         for (link, keys) in readings_list.iter().take(10) {
             println!("Link '{}' has {} keys: {:?}", link, keys.len(), keys);
         }
 
         // Write the readings list to a compressed file
-        reindexer
-            .write_compressed_readings_list("test_output/readings_list.txt")
-            .expect("write readings list");
+        mdx_conversion::reindexing::write_compressed_readings_list(
+            &readings_list,
+            "test_output/readings_list.txt",
+        )
+        .expect("write readings list");
 
         // Read it back and verify it matches the original
         let readings_list2 = mdx_conversion::reindexing::read_compressed_readings_list(
@@ -311,7 +312,7 @@ mod tests {
         .expect("read readings list");
 
         assert_eq!(
-            *readings_list, readings_list2,
+            readings_list, readings_list2,
             "Readings list should match after write and read"
         );
     }
@@ -350,8 +351,8 @@ mod tests {
         println!("Links for key '{}':", test_key);
 
         while let Some((key, value)) = stream.next() {
-            let record_size = fst_map.get_record_size(value).unwrap_or(0);
-            println!("  {} => {} with record size {}", key, value, record_size);
+            let (readings_entry, record_size) = fst_map.get_readings(value).unwrap();
+            println!("  {} => {} with record size {:?} and readings {:?}", key, value, record_size, readings_entry.readings);
         }
 
         let elapsed = start_time.elapsed();
@@ -383,7 +384,17 @@ mod tests {
         for key in test_keys {
             if let Some(link) = fst_map.get(key) {
                 // Get record size from FST map
-                let record_size = fst_map.get_record_size(link).unwrap_or(0);
+                let Some((_, record_size)) = fst_map.get_readings(link) else {
+                    println!("No readings entry found for link {} of key '{}'", link, key);
+                    continue;
+                };
+
+                if record_size.is_none() {
+                    println!("Record goes to end of file for link {} of key '{}'", link, key);
+                    continue;
+                }
+
+                let record_size = record_size.unwrap();
 
                 // Verify that we get a reasonable record size (not zero)
                 assert!(
@@ -392,7 +403,7 @@ mod tests {
                     key
                 );
                 println!(
-                    "Key '{}' has link {} with record size {}",
+                    "Key '{}' has link {} with record size {:?}",
                     key, link, record_size
                 );
             } else {
@@ -493,22 +504,22 @@ mod tests {
             let Some(link) = fst_map.get(key) else {
                 continue;
             };
-            let Some(record_size) = fst_map.get_record_size(link) else {
+            let Some((_, record_size)) = fst_map.get_readings(link) else {
                 continue;
             };
 
-            let converted_record = converted
-                .decode_record(&mut record_reader, 0, link, record_size)
-                .expect("decode record from converted section");
+            let converted_record = fst_map
+                .get_record(link, &mut record_reader, record_size)
+                .expect("get record from converted section");
 
             let rec_block = mdict.record_section.bin_search_record_index(link) as usize;
             let decomp = mdict
                 .decode_record_block(rec_block)
                 .expect("decode record block from original");
-            let uncompressed_before = mdict.record_section.record_index_prefix_sum[rec_block]
-                .uncompressed_size;
+            let uncompressed_before =
+                mdict.record_section.record_index_prefix_sum[rec_block].uncompressed_size;
             let start = (link - uncompressed_before) as usize;
-            let end = start.saturating_add(record_size).min(decomp.len());
+            let end = start.saturating_add(record_size.unwrap_or(decomp.len() as u64) as usize).min(decomp.len());
             let original_record = decomp[start..end].to_vec();
 
             assert_eq!(

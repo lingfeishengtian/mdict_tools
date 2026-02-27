@@ -1,4 +1,4 @@
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::{collections::{HashMap, HashSet}, io::{Read, Seek, SeekFrom, Write}};
 
 use binrw::{BinRead, BinWrite};
 
@@ -73,9 +73,9 @@ impl RecordSection {
     pub fn bin_search_record_index(&self, offset: u64) -> u64 {
         let idx = self
             .record_index_prefix_sum
-            .partition_point(|ri| ri.uncompressed_size <= offset);
-
-        (idx - 1) as u64
+            .binary_search_by_key(&offset, |ri| ri.uncompressed_size)
+            .unwrap_or_else(|x| x - 1) as u64;
+        idx
     }
 
     /// Decode a single record payload using an uncompressed `link` offset and expected `record_size`.
@@ -87,7 +87,7 @@ impl RecordSection {
         reader: &mut R,
         section_offset: u64,
         link: u64,
-        record_size: usize,
+        record_size: Option<u64>,
     ) -> Result<Vec<u8>> {
         if self.record_index_prefix_sum.len() < 2 {
             return Err(MDictError::InvalidFormat(
@@ -133,7 +133,7 @@ impl RecordSection {
             )));
         }
 
-        let end = start.saturating_add(record_size).min(decomp.len());
+        let end = start.saturating_add(record_size.unwrap_or(decomp.len() as u64) as usize).min(decomp.len());
         Ok(decomp[start..end].to_vec())
     }
 
@@ -146,5 +146,29 @@ impl RecordSection {
         std::io::copy(old_file, writer)?;
         
         Ok(())
+    }
+
+    pub fn detect_record_indexes_never_used(&self, readings_list: &HashMap<u64, HashSet<String>>) -> u64 {
+        let mut used_blocks = HashSet::new();
+
+        for &link in readings_list.keys() {
+            let rec_block = self.bin_search_record_index(link) as usize;
+            used_blocks.insert(rec_block);
+        }
+
+        let mut never_used = Vec::new();
+        for i in 0..(self.record_index_prefix_sum.len() - 1) {
+            if !used_blocks.contains(&i) {
+                never_used.push(i);
+            }
+        }
+
+        let compressed_size_saved: u64 = never_used.iter().map(|&i| {
+            let start_comp = self.record_index_prefix_sum[i].compressed_size;
+            let end_comp = self.record_index_prefix_sum[i + 1].compressed_size;
+            end_comp - start_comp
+        }).sum();
+        
+        compressed_size_saved
     }
 }
