@@ -353,6 +353,8 @@ mod tests {
         while let Some((key, value)) = stream.next() {
             let (readings_entry, record_size) = fst_map.get_readings(value).unwrap();
             println!("  {} => {} with record size {:?} and readings {:?}", key, value, record_size, readings_entry.readings);
+            let record = fst_map.get_record(value, &mut File::open("test_output/record_section.dat").expect("open record section file"), record_size).expect("get record");
+            println!("    record size: {} : {}", record.len(), String::from_utf8_lossy(&record));
         }
 
         let elapsed = start_time.elapsed();
@@ -361,6 +363,87 @@ mod tests {
             "FST search for key '{}' took {:.6} seconds",
             test_key,
             elapsed.as_secs_f64()
+        );
+    }
+
+    #[test]
+    fn test_search_jisho_in_fst_and_mdict_ensure_same() {
+        use std::collections::BTreeSet;
+
+        let test_key = "辞書";
+
+        let fst_map = FSTMap::load_from_path(
+            "test_output/fst_index.fst",
+            "test_output/fst_index_values.txt",
+            "test_output/record_section.dat",
+        )
+        .expect("load fst index");
+
+        let mut fst_results: Vec<(String, u64)> = Vec::new();
+        let mut fst_stream = fst_map.get_link_for_key(test_key);
+        while let Some((k, v)) = fst_stream.next() {
+            println!("  [fst] key='{}' link={}", String::from_utf8_lossy(k), v);
+            fst_results.push((String::from_utf8_lossy(k).into_owned(), v));
+        }
+
+        assert!(
+            !fst_results.is_empty(),
+            "Expected FST results for prefix '{}'",
+            test_key
+        );
+
+        let f = File::open(SAMPLE_PATH).expect("open mdx file");
+        let mut mdict = Mdict::new_with_cache(f, usize::MAX).expect("open mdx via Mdict");
+        let mut md_iter = mdict.search_keys_prefix(test_key).expect("search mdict");
+        let md_results = md_iter.collect_to_vec().expect("collect mdict results");
+
+        assert!(
+            !md_results.is_empty(),
+            "Expected MDict results for prefix '{}'",
+            test_key
+        );
+
+        let fst_key_set: BTreeSet<String> = fst_results.iter().map(|(k, _)| k.clone()).collect();
+        let md_key_set: BTreeSet<String> = md_results.iter().map(|kb| kb.key_text.clone()).collect();
+
+        assert_eq!(
+            fst_key_set, md_key_set,
+            "Prefix key sets should match between FST and MDict for '{}'",
+            test_key
+        );
+
+        let (_, fst_link) = fst_results
+            .iter()
+            .find(|(k, _)| k == test_key)
+            .expect("find exact key in FST results");
+        let (readings_entry, record_size) = fst_map
+            .get_readings(*fst_link)
+            .expect("get readings entry from fst values");
+
+        let mut record_file = File::open("test_output/record_section.dat").expect("open record section file");
+        let fst_record = fst_map
+            .get_record(*fst_link, &mut record_file, record_size)
+            .expect("get record from fst map");
+
+        let md_key_block = md_results
+            .iter()
+            .find(|kb| kb.key_text == test_key)
+            .expect("find exact key in mdict results")
+            .clone();
+        let md_record = get_record_for_key_id(&mut mdict, &md_key_block);
+
+        let fst_record_str = String::from_utf8_lossy(&fst_record);
+        let md_record_str = String::from_utf8_lossy(&md_record);
+
+        println!(
+            "Compared exact key '{}' with link {} and readings {:?}",
+            test_key, readings_entry.link_id, readings_entry.readings
+        );
+
+        assert_eq!(
+            fst_record_str, md_record_str,
+            "Record string content should match for exact key '{}'",
+            test_key
         );
     }
 
@@ -497,14 +580,14 @@ mod tests {
 
         let record_file = File::open("test_output/record_section.dat").expect("open record file");
         let mut record_reader = BufReader::new(record_file);
-        let converted = mdx_conversion::records::RecordSection::parse(&mut record_reader, 0)
+        let _converted = mdx_conversion::records::RecordSection::parse(&mut record_reader, 0)
             .expect("parse converted record section");
 
         for key in ["辞", "辞書", "日本語"] {
             let Some(link) = fst_map.get(key) else {
                 continue;
             };
-            let Some((_, record_size)) = fst_map.get_readings(link) else {
+            let Some((_readings_entry, record_size)) = fst_map.get_readings(link) else {
                 continue;
             };
 
@@ -512,15 +595,14 @@ mod tests {
                 .get_record(link, &mut record_reader, record_size)
                 .expect("get record from converted section");
 
-            let rec_block = mdict.record_section.bin_search_record_index(link) as usize;
-            let decomp = mdict
-                .decode_record_block(rec_block)
-                .expect("decode record block from original");
-            let uncompressed_before =
-                mdict.record_section.record_index_prefix_sum[rec_block].uncompressed_size;
-            let start = (link - uncompressed_before) as usize;
-            let end = start.saturating_add(record_size.unwrap_or(decomp.len() as u64) as usize).min(decomp.len());
-            let original_record = decomp[start..end].to_vec();
+            let mut iter = mdict.search_keys_prefix(key).expect("search key in original mdict");
+            let key_block = iter
+                .collect_to_vec()
+                .expect("collect original key matches")
+                .into_iter()
+                .find(|kb| kb.key_text == key)
+                .expect("find exact original key match");
+            let original_record = get_record_for_key_id(&mut mdict, &key_block);
 
             assert_eq!(
                 converted_record, original_record,

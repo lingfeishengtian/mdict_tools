@@ -67,12 +67,15 @@ impl FSTMap {
 
     pub fn get_record<R: Read + Seek>(
         &self,
-        link: u64,
+        readings_offset: u64,
         reader: &mut R,
         record_size: Option<u64>,
     ) -> Option<Vec<u8>> {
+        let (readings_entry, size_from_readings) = self.get_readings(readings_offset)?;
+        let effective_size = record_size.or(size_from_readings);
+
         self.record_section
-            .decode_record(reader, 0, link, record_size)
+            .decode_record(reader, 0, readings_entry.link_id, effective_size)
             .ok()
     }
 
