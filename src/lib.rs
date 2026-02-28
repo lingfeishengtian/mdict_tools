@@ -8,6 +8,7 @@ pub mod seekable_mmap;
 pub mod error;
 pub mod mdict_file;
 pub mod mdx_conversion;
+pub mod packed_storage;
 pub mod prefix_key_block_index;
 pub mod random_access_key_blocks;
 pub mod types;
