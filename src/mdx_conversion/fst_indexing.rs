@@ -9,11 +9,15 @@ use fst::map::{Stream, StreamBuilder};
 use fst::{IntoStreamer, Map, MapBuilder, Streamer};
 use memmap2::Mmap;
 use sorted_vec::{SortedSet, SortedVec};
+use zstd::bulk::compress as zstd_compress;
 
 use crate::error::Result;
 use crate::mdx_conversion::records::RecordSection as MdxRecordSection;
 use crate::random_access_key_blocks::upper_bound_from_prefix;
 use crate::Mdict;
+
+const READINGS_ZSTD_LEVEL: i32 = 10;
+const READINGS_TARGET_UNCOMPRESSED_BLOCK_SIZE: usize = 64 * 1024;
 
 fn write_readings_data_and_collect_key_offsets(
     readings_list: &HashMap<u64, HashSet<String>>,
@@ -23,8 +27,32 @@ fn write_readings_data_and_collect_key_offsets(
 ) -> Result<HashMap<String, u64>> {
     let mut key_link_map = HashMap::new();
 
-    let mut readings_output_file = File::create(readings_path)?;
-    let mut offset = 0u64;
+    let mut uncompressed_offset = 0u64;
+    let mut pending_block = Vec::<u8>::new();
+    let mut compressed_blocks = Vec::<Vec<u8>>::new();
+    let mut block_prefix_sum = vec![(0u64, 0u64)];
+
+    let mut total_compressed = 0u64;
+    let mut total_uncompressed = 0u64;
+
+    let flush_block = |pending_block: &mut Vec<u8>,
+                       compressed_blocks: &mut Vec<Vec<u8>>,
+                       block_prefix_sum: &mut Vec<(u64, u64)>,
+                       total_compressed: &mut u64,
+                       total_uncompressed: &mut u64|
+     -> Result<()> {
+        if pending_block.is_empty() {
+            return Ok(());
+        }
+
+        let compressed_block = zstd_compress(pending_block, READINGS_ZSTD_LEVEL)?;
+        *total_compressed += compressed_block.len() as u64;
+        *total_uncompressed += pending_block.len() as u64;
+        block_prefix_sum.push((*total_compressed, *total_uncompressed));
+        compressed_blocks.push(compressed_block);
+        pending_block.clear();
+        Ok(())
+    };
 
     for &old_link in link_order {
         let Some(indices) = readings_list.get(&old_link) else {
@@ -39,15 +67,51 @@ fn write_readings_data_and_collect_key_offsets(
         let indices_combined = indices.iter().cloned().collect::<Vec<String>>().join("\0");
         let indices_bytes = indices_combined.as_bytes();
 
-        readings_output_file.write_all(&(indices_bytes.len() as u32).to_le_bytes())?;
-        readings_output_file.write_all(&remapped_link.to_le_bytes())?;
-        readings_output_file.write_all(indices_bytes)?;
+        let mut entry_bytes = Vec::with_capacity(12 + indices_bytes.len());
+        entry_bytes.extend_from_slice(&(indices_bytes.len() as u32).to_le_bytes());
+        entry_bytes.extend_from_slice(&remapped_link.to_le_bytes());
+        entry_bytes.extend_from_slice(indices_bytes);
 
-        for index in indices {
-            key_link_map.entry(index.clone()).or_insert(offset);
+        if !pending_block.is_empty()
+            && pending_block.len() + entry_bytes.len() > READINGS_TARGET_UNCOMPRESSED_BLOCK_SIZE
+        {
+            flush_block(
+                &mut pending_block,
+                &mut compressed_blocks,
+                &mut block_prefix_sum,
+                &mut total_compressed,
+                &mut total_uncompressed,
+            )?;
         }
 
-        offset += indices_bytes.len() as u64 + 12;
+        pending_block.extend_from_slice(&entry_bytes);
+
+        for index in indices {
+            key_link_map
+                .entry(index.clone())
+                .or_insert(uncompressed_offset);
+        }
+
+        uncompressed_offset += entry_bytes.len() as u64;
+    }
+
+    flush_block(
+        &mut pending_block,
+        &mut compressed_blocks,
+        &mut block_prefix_sum,
+        &mut total_compressed,
+        &mut total_uncompressed,
+    )?;
+
+    let mut readings_output_file = File::create(readings_path)?;
+    readings_output_file.write_all(&(block_prefix_sum.len() as u64).to_le_bytes())?;
+    for (compressed_end, uncompressed_end) in &block_prefix_sum {
+        readings_output_file.write_all(&compressed_end.to_le_bytes())?;
+        readings_output_file.write_all(&uncompressed_end.to_le_bytes())?;
+    }
+
+    for compressed_block in compressed_blocks {
+        readings_output_file.write_all(&compressed_block)?;
     }
 
     Ok(key_link_map)
