@@ -149,7 +149,6 @@ impl PackedStorageIndex {
 
         let expected_size = plan.uncompressed_end - plan.uncompressed_start;
         let bytes = decode_block(self.header.encoding, &compressed, expected_size)?;
-        println!("Decoded block {}: compressed {} bytes to {} bytes", block_pos, compressed.len(), bytes.len());
 
         Ok(DecodedBlock {
             block_pos: plan.block_pos,

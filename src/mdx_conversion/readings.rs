@@ -19,29 +19,65 @@ pub struct ReadingsEntryHeader {
 }
 
 #[derive(Debug, Clone)]
-pub struct ReadingsParsedEntry {
+pub struct ReadingsEntry {
     pub length: u32,
     pub link_id: u64,
     pub readings: Vec<String>,
     pub entry_size: u64,
 }
 
-pub type ReadingsEntry = ReadingsParsedEntry;
+fn parse_readings_payload(payload: &[u8]) -> Result<Vec<String>> {
+    let mut readings = Vec::new();
+    let mut start = 0usize;
+
+    for (idx, &byte) in payload.iter().enumerate() {
+        if byte != 0 {
+            continue;
+        }
+
+        if idx > start {
+            let segment = &payload[start..idx];
+            let reading = std::str::from_utf8(segment)
+                .map(str::to_owned)
+                .map_err(|e| MDictError::InvalidFormat(format!("invalid utf8 reading: {}", e)))?;
+            readings.push(reading);
+        }
+        start = idx + 1;
+    }
+
+    if start < payload.len() {
+        let segment = &payload[start..];
+        let reading = std::str::from_utf8(segment)
+            .map(str::to_owned)
+            .map_err(|e| MDictError::InvalidFormat(format!("invalid utf8 reading: {}", e)))?;
+        readings.push(reading);
+    }
+
+    Ok(readings)
+}
 
 fn serialize_readings_entry(remapped_link: u64, readings: &HashSet<String>) -> Result<Vec<u8>> {
     let mut sorted_readings: Vec<&str> = readings.iter().map(String::as_str).collect();
     sorted_readings.sort_unstable();
-    let payload = sorted_readings.join("\0").into_bytes();
+    let payload_len: usize = sorted_readings.iter().map(|reading| reading.len()).sum::<usize>()
+        + sorted_readings.len().saturating_sub(1);
 
     let header = ReadingsEntryHeader {
-        length: payload.len() as u32,
+        length: payload_len as u32,
         link_id: remapped_link,
     };
 
-    let mut out = Vec::with_capacity(READINGS_ENTRY_HEADER_SIZE as usize + payload.len());
+    let mut out = Vec::with_capacity(READINGS_ENTRY_HEADER_SIZE as usize + payload_len);
     let mut cursor = Cursor::new(&mut out);
     header.write_le(&mut cursor)?;
-    out.extend_from_slice(&payload);
+
+    for (idx, reading) in sorted_readings.iter().enumerate() {
+        if idx > 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(reading.as_bytes());
+    }
+
     Ok(out)
 }
 
@@ -51,7 +87,8 @@ pub fn write_readings_data_and_collect_key_offsets(
     link_remap: &HashMap<u64, u64>,
     readings_path: impl AsRef<Path>,
 ) -> Result<HashMap<String, u64>> {
-    let mut key_link_map = HashMap::new();
+    let estimated_keys = readings_list.values().map(HashSet::len).sum();
+    let mut key_link_map = HashMap::with_capacity(estimated_keys);
     let output_file = File::create(readings_path)?;
     let mut writer = BufWriter::new(output_file);
     let mut current_offset = 0u64;
@@ -88,7 +125,7 @@ pub fn write_readings_data_and_collect_key_offsets(
 pub fn read_entry_from_offset<R: Read + Seek>(
     reader: &mut R,
     offset: u64,
-) -> Result<ReadingsParsedEntry> {
+) -> Result<ReadingsEntry> {
     reader.seek(SeekFrom::Start(offset))?;
     let header = ReadingsEntryHeader::read_le(reader)?;
 
@@ -96,18 +133,9 @@ pub fn read_entry_from_offset<R: Read + Seek>(
         .map_err(|_| MDictError::InvalidFormat("readings payload length overflow".to_string()))?;
     let mut payload = vec![0u8; payload_len];
     reader.read_exact(&mut payload)?;
+    let readings = parse_readings_payload(&payload)?;
 
-    let readings = payload
-        .split(|&byte| byte == 0)
-        .filter(|segment| !segment.is_empty())
-        .map(|segment| {
-            std::str::from_utf8(segment)
-                .map(str::to_owned)
-                .map_err(|e| MDictError::InvalidFormat(format!("invalid utf8 reading: {}", e)))
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(ReadingsParsedEntry {
+    Ok(ReadingsEntry {
         length: header.length,
         link_id: header.link_id,
         readings,
@@ -115,18 +143,59 @@ pub fn read_entry_from_offset<R: Read + Seek>(
     })
 }
 
-pub fn read_header_from_bytes(bytes: &[u8], offset: u64) -> Option<ReadingsEntryHeader> {
-    let start = usize::try_from(offset).ok()?;
-    let end = start.checked_add(READINGS_ENTRY_HEADER_SIZE as usize)?;
-    let slice = bytes.get(start..end)?;
+pub fn read_header_from_bytes_result(bytes: &[u8], offset: u64) -> Result<ReadingsEntryHeader> {
+    let start = usize::try_from(offset)
+        .map_err(|_| MDictError::InvalidFormat("readings header offset overflow".to_string()))?;
+    let end = start
+        .checked_add(READINGS_ENTRY_HEADER_SIZE as usize)
+        .ok_or_else(|| MDictError::InvalidFormat("readings header range overflow".to_string()))?;
+    let slice = bytes.get(start..end).ok_or_else(|| {
+        MDictError::InvalidFormat(format!(
+            "readings header out of bounds at offset {}",
+            offset
+        ))
+    })?;
 
     let mut cursor = Cursor::new(slice);
-    ReadingsEntryHeader::read_le(&mut cursor).ok()
+    Ok(ReadingsEntryHeader::read_le(&mut cursor)?)
 }
 
-pub fn read_entry_from_bytes(bytes: &[u8], offset: u64) -> Option<ReadingsParsedEntry> {
-    let mut cursor = Cursor::new(bytes);
-    read_entry_from_offset(&mut cursor, offset).ok()
+pub fn read_header_from_bytes(bytes: &[u8], offset: u64) -> Option<ReadingsEntryHeader> {
+    read_header_from_bytes_result(bytes, offset).ok()
+}
+
+pub fn read_entry_from_bytes_result(bytes: &[u8], offset: u64) -> Result<ReadingsEntry> {
+    let header = read_header_from_bytes_result(bytes, offset)?;
+    let start = usize::try_from(offset)
+        .map_err(|_| MDictError::InvalidFormat("readings entry offset overflow".to_string()))?;
+    let payload_start = start
+        .checked_add(READINGS_ENTRY_HEADER_SIZE as usize)
+        .ok_or_else(|| MDictError::InvalidFormat("readings payload start overflow".to_string()))?;
+    let payload_len = usize::try_from(header.length)
+        .map_err(|_| MDictError::InvalidFormat("readings payload length overflow".to_string()))?;
+    let payload_end = payload_start
+        .checked_add(payload_len)
+        .ok_or_else(|| MDictError::InvalidFormat("readings payload end overflow".to_string()))?;
+
+    let payload = bytes.get(payload_start..payload_end).ok_or_else(|| {
+        MDictError::InvalidFormat(format!(
+            "readings payload out of bounds at offset {}",
+            offset
+        ))
+    })?;
+
+    let readings = parse_readings_payload(payload)?;
+
+    Ok(ReadingsEntry {
+        length: header.length,
+        link_id: header.link_id,
+        readings,
+        entry_size: READINGS_ENTRY_HEADER_SIZE + header.length as u64,
+    })
+}
+
+pub fn read_entry_from_bytes(bytes: &[u8], offset: u64) -> Option<ReadingsEntry> {
+    read_entry_from_bytes_result(bytes, offset).ok()
 }
 
 pub fn read_link_id_from_offset<R: Read + Seek>(

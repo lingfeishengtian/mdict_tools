@@ -7,9 +7,9 @@ use fst::map::Stream;
 use fst::{IntoStreamer, Map, Streamer};
 use memmap2::Mmap;
 
-use crate::error::Result;
+use crate::error::{MDictError, Result};
 use crate::mdx_conversion::readings::{
-    read_entry_from_bytes, read_header_from_bytes, ReadingsEntry,
+    read_entry_from_bytes_result, read_header_from_bytes_result, ReadingsEntry,
 };
 use crate::mdx_conversion::records::RecordSection as MdxRecordSection;
 use crate::random_access_key_blocks::upper_bound_from_prefix;
@@ -22,20 +22,31 @@ pub struct FSTMap {
 }
 
 impl FSTMap {
-    fn parse_readings_from_uncompressed_offset(&self, offset: u64) -> Option<(ReadingsEntry, u64)> {
+    fn ensure_readings_offset_in_bounds(&self, offset: u64) -> Result<()> {
         if offset >= self.readings_mmap.len() as u64 {
-            return None;
+            return Err(MDictError::InvalidArgument(format!(
+                "readings offset {} out of bounds for size {}",
+                offset,
+                self.readings_mmap.len()
+            )));
         }
-        let entry = read_entry_from_bytes(&self.readings_mmap, offset)?;
-        let entry_size = entry.entry_size;
-        Some((entry, entry_size))
+        Ok(())
     }
 
-    fn get_next_link_id_from_uncompressed_offset(&self, offset: u64) -> Option<u64> {
-        if offset >= self.readings_mmap.len() as u64 {
-            return None;
-        }
-        read_header_from_bytes(&self.readings_mmap, offset).map(|header| header.link_id)
+    fn parse_readings_from_uncompressed_offset_result(
+        &self,
+        offset: u64,
+    ) -> Result<(ReadingsEntry, u64)> {
+        self.ensure_readings_offset_in_bounds(offset)?;
+        let entry = read_entry_from_bytes_result(&self.readings_mmap, offset)?;
+        let entry_size = entry.entry_size;
+        Ok((entry, entry_size))
+    }
+
+    fn get_next_link_id_from_uncompressed_offset_result(&self, offset: u64) -> Result<u64> {
+        self.ensure_readings_offset_in_bounds(offset)?;
+        let header = read_header_from_bytes_result(&self.readings_mmap, offset)?;
+        Ok(header.link_id)
     }
 
     pub fn load_from_path(
@@ -59,15 +70,6 @@ impl FSTMap {
         })
     }
 
-    pub fn load_from_path_with_cache(
-        path: impl AsRef<Path>,
-        readings_path: impl AsRef<Path>,
-        record_path: impl AsRef<Path>,
-        _readings_cache_blocks: usize,
-    ) -> Result<Self> {
-        Self::load_from_path(path, readings_path, record_path)
-    }
-
     pub fn get(&self, key: &str) -> Option<u64> {
         self.map.get(key)
     }
@@ -89,21 +91,37 @@ impl FSTMap {
         readings_offset: u64,
         record_size: Option<u64>,
     ) -> Option<Vec<u8>> {
-        let (readings_entry, size_from_readings) = self.get_readings(readings_offset)?;
+        self.get_record_result(readings_offset, record_size).ok()
+    }
+
+    pub fn get_record_result(
+        &self,
+        readings_offset: u64,
+        record_size: Option<u64>,
+    ) -> Result<Vec<u8>> {
+        let (readings_entry, size_from_readings) = self.get_readings_result(readings_offset)?;
         let effective_size = record_size.or(size_from_readings);
-        let mut record_file = self.record_file.borrow_mut();
+        let mut record_file = self
+            .record_file
+            .try_borrow_mut()
+            .map_err(|_| MDictError::InvalidFormat("record file is already borrowed".to_string()))?;
         self.record_section
             .decode_record(&mut *record_file, readings_entry.link_id, effective_size)
-            .ok()
     }
 
     pub fn get_readings(&self, offset: u64) -> Option<(ReadingsEntry, Option<u64>)> {
-        let (entry, entry_size) = self.parse_readings_from_uncompressed_offset(offset)?;
-        let next_offset = offset.checked_add(entry_size)?;
-        let next_link = self.get_next_link_id_from_uncompressed_offset(next_offset);
+        self.get_readings_result(offset).ok()
+    }
+
+    pub fn get_readings_result(&self, offset: u64) -> Result<(ReadingsEntry, Option<u64>)> {
+        let (entry, entry_size) = self.parse_readings_from_uncompressed_offset_result(offset)?;
+        let next_offset = offset
+            .checked_add(entry_size)
+            .ok_or_else(|| MDictError::InvalidFormat("readings offset overflow".to_string()))?;
+        let next_link = self.get_next_link_id_from_uncompressed_offset_result(next_offset).ok();
         let record_size = next_link.and_then(|next_link_id| next_link_id.checked_sub(entry.link_id));
 
-        Some((entry, record_size))
+        Ok((entry, record_size))
     }
 }
 
