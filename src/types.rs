@@ -11,6 +11,26 @@ pub struct SearchHit {
     pub record: String,
 }
 
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PrefixSearchCursor {
+    pub after_key: String,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct PrefixSearchPage {
+    pub results: Vec<KeyBlock>,
+    pub next_cursor: Option<PrefixSearchCursor>,
+    pub total_results: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BuildProgressStage {
+    Start,
+    BuildReadings,
+    BuildFst,
+    Done,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum MdictVersion {
     V1,

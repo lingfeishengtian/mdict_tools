@@ -86,6 +86,54 @@ impl FSTMap {
         DedupStream::new(self.get_link_for_key(key))
     }
 
+    pub fn get_link_page_for_prefix(
+        &self,
+        prefix: &str,
+        cursor_after_key: Option<&str>,
+        page_size: usize,
+    ) -> Result<(Vec<(String, u64)>, Option<String>)> {
+        if page_size == 0 {
+            return Err(MDictError::InvalidArgument(
+                "page_size must be greater than 0".to_string(),
+            ));
+        }
+
+        let upper_bound = upper_bound_from_prefix(prefix).ok_or_else(|| {
+            MDictError::InvalidArgument(format!("invalid prefix for range bound: '{}'", prefix))
+        })?;
+
+        let mut builder = self.map.range();
+        if let Some(after_key) = cursor_after_key {
+            builder = builder.gt(after_key);
+        } else {
+            builder = builder.ge(prefix);
+        }
+        builder = builder.lt(&upper_bound);
+
+        let mut stream = builder.into_stream();
+        let mut results = Vec::with_capacity(page_size + 1);
+
+        while results.len() < page_size + 1 {
+            let Some((raw_key, value)) = stream.next() else {
+                break;
+            };
+            results.push((String::from_utf8_lossy(raw_key).to_string(), value));
+        }
+
+        let has_more = results.len() > page_size;
+        if has_more {
+            results.truncate(page_size);
+        }
+
+        let next_cursor = if has_more {
+            results.last().map(|(key, _)| key.clone())
+        } else {
+            None
+        };
+
+        Ok((results, next_cursor))
+    }
+
     pub fn get_record(
         &self,
         readings_offset: u64,

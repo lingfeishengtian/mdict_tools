@@ -1,13 +1,17 @@
 use std::{
     fs::File,
     io::{Read, Seek},
-    iter::Map,
-    sync::{Arc, Mutex},
+    path::Path,
+    sync::Mutex,
 };
 
 use crate::{
-    error::MDictError, prefix_key_block_index::PrefixKeyBlockIndexInternal,
-    seekable_mmap::SeekableMmap, types::KeyBlock, Mdict,
+    error::MDictError,
+    mdx_conversion::{fst_indexing::create_fst_index, reindexing::build_readings_list},
+    prefix_key_block_index::PrefixKeyBlockIndexInternal,
+    seekable_mmap::SeekableMmap,
+    types::{BuildProgressStage, KeyBlock},
+    Mdict,
 };
 
 #[derive(uniffi::Object)]
@@ -55,6 +59,50 @@ impl<R: Read + Seek> Mdict<R> {
 
     pub fn get(&mut self, index: usize) -> Result<Option<KeyBlock>, MDictError> {
         self.key_block_index.get(&mut self.reader, index)
+    }
+}
+
+impl MdictBundle {
+    pub(crate) fn build_fst_files_with_progress<F>(
+        &self,
+        fst_path: impl AsRef<Path>,
+        readings_path: impl AsRef<Path>,
+        record_path: impl AsRef<Path>,
+        mut on_progress: F,
+    ) -> Result<(), MDictError>
+    where
+        F: FnMut(BuildProgressStage, u64, u64),
+    {
+        let mut mdx = self.mdx.lock().unwrap();
+        let old_cache_limit = mdx.record_block_cache_limit();
+        mdx.set_record_block_cache_limit(usize::MAX);
+
+        on_progress(BuildProgressStage::BuildReadings, 1, 3);
+        let readings_list = build_readings_list(&mut *mdx)?;
+
+        on_progress(BuildProgressStage::BuildFst, 2, 3);
+        create_fst_index(
+            &mut *mdx,
+            &readings_list,
+            fst_path,
+            readings_path,
+            record_path,
+        )?;
+
+        mdx.set_record_block_cache_limit(old_cache_limit);
+        mdx.clear_record_block_cache();
+
+        on_progress(BuildProgressStage::Done, 3, 3);
+        Ok(())
+    }
+
+    pub(crate) fn build_fst_files(
+        &self,
+        fst_path: impl AsRef<Path>,
+        readings_path: impl AsRef<Path>,
+        record_path: impl AsRef<Path>,
+    ) -> Result<(), MDictError> {
+        self.build_fst_files_with_progress(fst_path, readings_path, record_path, |_stage, _, _| {})
     }
 }
 

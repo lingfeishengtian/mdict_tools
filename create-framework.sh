@@ -10,17 +10,19 @@ echo "Cleaning old outputs..."
 rm -rf "$OUTPUT_DIR"
 
 echo "Ensuring Rust targets..."
-rustup target add aarch64-apple-ios x86_64-apple-ios
+rustup target add aarch64-apple-ios
+rustup target add aarch64-apple-ios-sim
 
 ####################################
 # 1. Build static libraries
 ####################################
 echo "Building static libs for iOS..."
 
+export IPHONEOS_DEPLOYMENT_TARGET=16.0
 # iOS devices
 cargo build --release --target aarch64-apple-ios
-# iOS simulator
-cargo build --release --target x86_64-apple-ios
+# iOS simulator (Apple Silicon)
+cargo build --release --target aarch64-apple-ios-sim
 
 ####################################
 # 2. Create universal static lib (iOS only)

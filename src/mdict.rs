@@ -138,4 +138,16 @@ impl<R: Read + Seek> Mdict<R> {
 
         Ok(decomp)
     }
+
+    pub fn record_block_cache_limit(&self) -> usize {
+        self.max_record_blocks_to_cache
+    }
+
+    pub fn set_record_block_cache_limit(&mut self, max_record_blocks_to_cache: usize) {
+        self.max_record_blocks_to_cache = max_record_blocks_to_cache;
+    }
+
+    pub fn clear_record_block_cache(&mut self) {
+        self.cached_record_blocks.clear();
+    }
 }
