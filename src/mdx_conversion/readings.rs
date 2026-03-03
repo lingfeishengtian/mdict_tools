@@ -86,9 +86,9 @@ pub fn write_readings_data_and_collect_key_offsets(
     link_order: &[u64],
     link_remap: &HashMap<u64, u64>,
     readings_path: impl AsRef<Path>,
-) -> Result<HashMap<String, u64>> {
+) -> Result<Vec<(String, u64)>> {
     let estimated_keys = readings_list.values().map(HashSet::len).sum();
-    let mut key_link_map = HashMap::with_capacity(estimated_keys);
+    let mut key_link_pairs = Vec::with_capacity(estimated_keys);
     let output_file = File::create(readings_path)?;
     let mut writer = BufWriter::new(output_file);
     let mut current_offset = 0u64;
@@ -107,9 +107,7 @@ pub fn write_readings_data_and_collect_key_offsets(
         writer.write_all(&entry_bytes)?;
 
         for index in indices {
-            key_link_map
-                .entry(index.clone())
-                .or_insert(current_offset);
+            key_link_pairs.push((index.clone(), current_offset));
         }
 
         current_offset = current_offset
@@ -119,7 +117,7 @@ pub fn write_readings_data_and_collect_key_offsets(
 
     writer.flush()?;
 
-    Ok(key_link_map)
+    Ok(key_link_pairs)
 }
 
 pub fn read_entry_from_offset<R: Read + Seek>(

@@ -8,6 +8,7 @@ use fst::{IntoStreamer, Map, Streamer};
 use memmap2::Mmap;
 
 use crate::error::{MDictError, Result};
+use crate::mdx_conversion::strip_fst_key_metadata;
 use crate::mdx_conversion::readings::{
     read_entry_from_bytes_result, read_header_from_bytes_result, ReadingsEntry,
 };
@@ -71,7 +72,9 @@ impl FSTMap {
     }
 
     pub fn get(&self, key: &str) -> Option<u64> {
-        self.map.get(key)
+        let upper_bound = upper_bound_from_prefix(key)?;
+        let mut stream = self.map.range().ge(key).lt(&upper_bound).into_stream();
+        stream.next().map(|(_, value)| value)
     }
 
     pub fn get_link_for_key<'a>(&'a self, key: &'a str) -> Stream<'a> {
@@ -111,25 +114,32 @@ impl FSTMap {
         builder = builder.lt(&upper_bound);
 
         let mut stream = builder.into_stream();
-        let mut results = Vec::with_capacity(page_size + 1);
+        let mut rows = Vec::with_capacity(page_size + 1);
 
-        while results.len() < page_size + 1 {
+        while rows.len() < page_size + 1 {
             let Some((raw_key, value)) = stream.next() else {
                 break;
             };
-            results.push((String::from_utf8_lossy(raw_key).to_string(), value));
+            let key_with_metadata = String::from_utf8_lossy(raw_key).to_string();
+            let clean_key = strip_fst_key_metadata(&key_with_metadata).to_string();
+            rows.push((clean_key, value, key_with_metadata));
         }
 
-        let has_more = results.len() > page_size;
+        let has_more = rows.len() > page_size;
         if has_more {
-            results.truncate(page_size);
+            rows.truncate(page_size);
         }
 
         let next_cursor = if has_more {
-            results.last().map(|(key, _)| key.clone())
+            rows.last().map(|(_, _, key_with_metadata)| key_with_metadata.clone())
         } else {
             None
         };
+
+        let results = rows
+            .into_iter()
+            .map(|(clean_key, value, _)| (clean_key, value))
+            .collect::<Vec<_>>();
 
         Ok((results, next_cursor))
     }
@@ -194,7 +204,9 @@ impl<'a> Iterator for DedupStream<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(item) = self.stream.next() {
             if self.seen_values.insert(item.1) {
-                return Some((String::from_utf8_lossy(item.0).to_string(), item.1));
+                let key_with_metadata = String::from_utf8_lossy(item.0).to_string();
+                let key = strip_fst_key_metadata(&key_with_metadata).to_string();
+                return Some((key, item.1));
             }
         }
         None

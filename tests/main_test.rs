@@ -346,7 +346,7 @@ mod tests {
         .expect("load fst index");
 
         let start_time = Instant::now();
-        let test_key = "辞";
+        let test_key = "じしょ";
         let links: Vec<(String, u64)> = fst_map.get_link_for_key_dedup(test_key).collect();
         println!("Links for key '{}':", test_key);
 
@@ -370,7 +370,7 @@ mod tests {
     fn test_search_jisho_in_fst_and_mdict_ensure_same() {
         use std::collections::BTreeSet;
 
-        let test_key = "辞書";
+        let test_key = "じしょ";
 
         let fst_map = FSTMap::load_from_path(
             "test_output/fst_index.fst",

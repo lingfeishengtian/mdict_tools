@@ -7,21 +7,36 @@ use fst::MapBuilder;
 use crate::error::Result;
 use crate::mdx_conversion::readings;
 use crate::mdx_conversion::records::RecordSection as MdxRecordSection;
+use crate::mdx_conversion::with_fst_key_metadata;
 use crate::Mdict;
 
 fn write_fst_map(
-    key_link_map: &HashMap<String, u64>,
+    key_link_pairs: &[(String, u64)],
     output_path: impl AsRef<Path>,
 ) -> Result<()> {
     let output_file = File::create(output_path)?;
     let mut builder = MapBuilder::new(BufWriter::new(output_file))?;
 
-    let mut ordered_entries = BTreeMap::new();
-    for (key, &value) in key_link_map {
-        ordered_entries.insert(key.as_str(), value);
+    let mut key_counts: HashMap<&str, usize> = HashMap::new();
+    for (key, _) in key_link_pairs {
+        *key_counts.entry(key.as_str()).or_insert(0) += 1;
     }
 
-    for (key, value) in ordered_entries {
+    let mut decorated_entries = key_link_pairs
+        .iter()
+        .map(|(key, value)| {
+            let is_duplicate = key_counts.get(key.as_str()).copied().unwrap_or(0) > 1;
+            let indexed_key = if is_duplicate {
+                with_fst_key_metadata(key, *value)
+            } else {
+                key.clone()
+            };
+            (indexed_key, *value)
+        })
+        .collect::<Vec<_>>();
+    decorated_entries.sort_unstable_by(|(ka, _), (kb, _)| ka.cmp(kb));
+
+    for (key, value) in decorated_entries {
         builder.insert(key, value)?;
     }
 
@@ -82,13 +97,13 @@ pub fn create_fst_index<R: Read + Seek>(
 ) -> Result<()> {
     let link_order = build_sorted_key_link_order(readings_list);
     let link_remap = write_record_section(mdict, readings_list, &link_order, record_output_path)?;
-    let key_link_map = readings::write_readings_data_and_collect_key_offsets(
+    let key_link_pairs = readings::write_readings_data_and_collect_key_offsets(
         readings_list,
         &link_order,
         &link_remap,
         readings_path,
     )?;
-    write_fst_map(&key_link_map, output_path)?;
+    write_fst_map(&key_link_pairs, output_path)?;
 
     Ok(())
 }
